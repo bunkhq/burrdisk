@@ -1,18 +1,42 @@
+use std::time::Duration;
+
 use gpui::{
-    AnyElement, Context, FontWeight, IntoElement, SharedString, Window, canvas, div, prelude::*,
-    px, relative,
+    Animation, AnimationExt, AnyElement, Context, ElementId, FontWeight, Hsla, IntoElement,
+    SharedString, Window, canvas, div, linear_color_stop, linear_gradient,
+    prelude::*, px, relative,
 };
 
 use crate::app::Burrdisk;
 use crate::format;
 use crate::sunburst;
 use crate::theme;
-use crate::ui::components::{ButtonStyle, Icon, bar, button, icon, section_label};
+use crate::ui::components::{ButtonStyle, Icon, bar, glow, icon, icon_label_button, section_label};
+
+const GAUGE_FILL: Duration = Duration::from_millis(1100);
+
+/// Fades and lifts a section into place, `order` beats after the page appears.
+fn rise(el: impl IntoElement, id: impl Into<ElementId>, order: usize) -> AnyElement {
+    let delay = order as f32 * 0.07;
+    let total = delay + 0.45;
+    div()
+        .relative()
+        .child(el.into_any_element())
+        .with_animation(id, Animation::new(Duration::from_secs_f32(total)), move |el, t| {
+            let local = sunburst::ease_out_cubic(((t * total - delay) / 0.45).clamp(0.0, 1.0));
+            el.opacity(local).top(px(14. * (1. - local)))
+        })
+        .into_any_element()
+}
 use crate::volumes::{Volume, VolumeKind};
 
 const COLLAPSED_IMAGES: usize = 6;
 
-pub fn render(app: &mut Burrdisk, _window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    let fill_t = (app.home_since.elapsed().as_secs_f32() / GAUGE_FILL.as_secs_f32()).min(1.0);
+    if fill_t < 1.0 {
+        window.request_animation_frame();
+    }
+    let fill_t = 1.0 - (1.0 - fill_t).powi(4);
     let startup = app.volumes.iter().find(|v| v.kind == VolumeKind::Startup).cloned();
     let drives: Vec<Volume> = app
         .volumes
@@ -30,7 +54,7 @@ pub fn render(app: &mut Burrdisk, _window: &mut Window, cx: &mut Context<Burrdis
     let mut body = div().flex().flex_col().gap(px(36.)).w_full().max_w(px(920.)).mx_auto();
 
     if let Some(volume) = startup {
-        body = body.child(hero(volume, cx));
+        body = body.child(rise(hero(volume, fill_t, cx), "rise-hero", 0));
     } else if app.volumes_loaded {
         body = body.child(
             div()
@@ -40,7 +64,7 @@ pub fn render(app: &mut Burrdisk, _window: &mut Window, cx: &mut Context<Burrdis
     }
 
     if !drives.is_empty() {
-        body = body.child(
+        body = body.child(rise(
             div()
                 .flex()
                 .flex_col()
@@ -53,7 +77,9 @@ pub fn render(app: &mut Burrdisk, _window: &mut Window, cx: &mut Context<Burrdis
                         .gap_3()
                         .children(drives.into_iter().enumerate().map(|(ix, v)| drive_card(ix, v, cx))),
                 ),
-        );
+            "rise-drives",
+            1,
+        ));
     }
 
     if !images.is_empty() {
@@ -64,7 +90,7 @@ pub fn render(app: &mut Burrdisk, _window: &mut Window, cx: &mut Context<Burrdis
         } else {
             images.into_iter().take(COLLAPSED_IMAGES).collect()
         };
-        body = body.child(
+        body = body.child(rise(
             div()
                 .flex()
                 .flex_col()
@@ -106,7 +132,9 @@ pub fn render(app: &mut Burrdisk, _window: &mut Window, cx: &mut Context<Burrdis
                         .gap_2()
                         .children(shown.into_iter().enumerate().map(|(ix, v)| image_row(ix, v, cx))),
                 ),
-        );
+            "rise-images",
+            2,
+        ));
     }
 
     div()
@@ -137,24 +165,40 @@ fn titlebar(cx: &mut Context<Burrdisk>) -> impl IntoElement {
         .pr(px(20.))
         .child(
             div()
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme::text_muted())
-                .child("Burrdisk"),
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    div()
+                        .size(px(14.))
+                        .rounded_full()
+                        .border_3()
+                        .border_color(theme::accent())
+                        .shadow(glow(theme::accent(), 1.2)),
+                )
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme::text())
+                        .child("Burrdisk"),
+                ),
         )
-        .child(button(
+        .child(icon_label_button(
             "scan-folder",
+            Icon::FolderSearch,
             "Scan Folder…",
             ButtonStyle::Secondary,
             cx.listener(|this, _, _, cx| this.pick_folder(cx)),
         ))
 }
 
-fn hero(volume: Volume, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+fn hero(volume: Volume, fill_t: f32, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let ratio = volume.fill_ratio();
+    let shown_ratio = ratio * fill_t;
     let fill = theme::fullness(ratio);
     let (used_num, used_unit) = format::bytes_parts(volume.total.saturating_sub(volume.available));
-    let percent = format!("{:.0}%", ratio * 100.0);
+    let percent = format!("{:.0}", shown_ratio * 100.0);
     let details: SharedString = format!(
         "{} · {}",
         volume.subtitle(),
@@ -170,12 +214,29 @@ fn hero(volume: Volume, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         .items_center()
         .gap(px(40.))
         .p(px(32.))
-        .rounded(px(20.))
-        .bg(theme::surface())
+        .rounded(px(22.))
+        .bg(linear_gradient(
+            135.,
+            linear_color_stop(gpui::rgb(0x2a1f18), 0.),
+            linear_color_stop(theme::surface(), 0.55),
+        ))
         .border_1()
-        .border_color(theme::border())
+        .border_color(Hsla::from(theme::accent()).opacity(0.16))
+        .shadow(vec![gpui::BoxShadow {
+            color: gpui::black().opacity(0.4),
+            offset: gpui::point(px(0.), px(12.)),
+            blur_radius: px(32.),
+            spread_radius: px(-8.),
+        }])
         .cursor_pointer()
-        .hover(|s| s.border_color(theme::border_strong()))
+        .hover(|s| {
+            s.border_color(Hsla::from(theme::accent()).opacity(0.38)).shadow(vec![gpui::BoxShadow {
+                color: Hsla::from(theme::accent()).opacity(0.16),
+                offset: gpui::point(px(0.), px(12.)),
+                blur_radius: px(40.),
+                spread_radius: px(-6.),
+            }])
+        })
         .on_click(cx.listener(move |this, _, _, cx| this.scan_volume(card_volume.clone(), cx)))
         .child(
             div()
@@ -186,7 +247,7 @@ fn hero(volume: Volume, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                     canvas(
                         |_, _, _| {},
                         move |bounds, _, window, _| {
-                            sunburst::paint_gauge(window, bounds, ratio, 16.0, fill, theme::track().into());
+                            sunburst::paint_gauge(window, bounds, shown_ratio, 16.0, fill, theme::track().into());
                         },
                     )
                     .size_full(),
@@ -201,9 +262,10 @@ fn hero(volume: Volume, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         .justify_center()
                         .child(
                             div()
-                                .text_size(px(34.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(percent),
+                                .flex()
+                                .items_baseline()
+                                .child(div().text_size(px(38.)).font_weight(FontWeight::BOLD).child(percent))
+                                .child(div().text_base().text_color(theme::text_muted()).child("%")),
                         )
                         .child(div().text_xs().text_color(theme::text_muted()).child("full")),
                 ),
@@ -267,8 +329,9 @@ fn hero(volume: Volume, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         )
         .child(
             div().flex_none().child(
-                button(
+                icon_label_button(
                     "scan-startup",
+                    Icon::Scan,
                     "Scan",
                     ButtonStyle::Primary,
                     cx.listener(move |this, _, _, cx| {
@@ -276,10 +339,11 @@ fn hero(volume: Volume, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         this.scan_volume(scan_volume.clone(), cx)
                     }),
                 )
-                .h(px(40.))
-                .px(px(22.))
+                .h(px(44.))
+                .pl(px(18.))
+                .pr(px(22.))
                 .text_base()
-                .rounded(px(10.)),
+                .rounded(px(12.)),
             ),
         )
 }
@@ -309,20 +373,29 @@ fn drive_card(ix: usize, volume: Volume, cx: &mut Context<Burrdisk>) -> AnyEleme
     };
     let free = format!("{} free of {}", format::bytes(volume.available), format::bytes(volume.total));
     let target = volume.clone();
+    let group: SharedString = format!("drive-{ix}").into();
     div()
         .id(("drive", ix))
+        .group(group.clone())
         .flex()
         .flex_col()
         .gap_3()
         .w(relative(0.325))
         .min_w(px(220.))
         .p_4()
-        .rounded(px(14.))
-        .bg(theme::surface())
+        .rounded(px(16.))
+        .bg(linear_gradient(
+            180.,
+            linear_color_stop(theme::surface_hover(), 0.),
+            linear_color_stop(theme::surface(), 1.),
+        ))
         .border_1()
         .border_color(theme::border())
         .cursor_pointer()
-        .hover(|s| s.bg(theme::surface_hover()).border_color(theme::border_strong()))
+        .hover(|s| {
+            s.border_color(Hsla::from(theme::accent()).opacity(0.35))
+                .shadow(glow(theme::accent(), 0.8))
+        })
         .on_click(cx.listener(move |this, _, _, cx| this.scan_volume(target.clone(), cx)))
         .child(
             div()
@@ -334,10 +407,14 @@ fn drive_card(ix: usize, volume: Volume, cx: &mut Context<Burrdisk>) -> AnyEleme
                         .flex()
                         .items_center()
                         .justify_center()
-                        .size(px(32.))
-                        .rounded(px(8.))
+                        .size(px(34.))
+                        .rounded(px(10.))
                         .bg(theme::raised())
-                        .child(icon(glyph, 16.0, theme::text_muted())),
+                        .group_hover(group.clone(), |s| s.bg(theme::accent_soft()))
+                        .child(
+                            icon(glyph, 16.0, theme::text_muted())
+                                .group_hover(group, |s| s.text_color(theme::accent_hi())),
+                        ),
                 )
                 .child(
                     div()
@@ -348,25 +425,43 @@ fn drive_card(ix: usize, volume: Volume, cx: &mut Context<Burrdisk>) -> AnyEleme
                         .child(div().text_xs().text_color(theme::text_faint()).child(volume.subtitle())),
                 ),
         )
-        .child(bar(ratio, theme::fullness(ratio), 4.0))
+        .child(bar(("drive-bar", ix), ratio, theme::fullness(ratio), 5.0))
         .child(div().text_xs().text_color(theme::text_muted()).child(free))
         .into_any_element()
 }
 
 fn image_row(ix: usize, volume: Volume, cx: &mut Context<Burrdisk>) -> AnyElement {
     let target = volume.clone();
+    let group: SharedString = format!("image-{ix}").into();
     div()
         .id(("image", ix))
+        .group(group.clone())
         .flex()
         .items_center()
         .gap_3()
-        .h(px(44.))
-        .px_3()
-        .rounded(px(10.))
+        .h(px(46.))
+        .px_2()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(gpui::transparent_black())
         .cursor_pointer()
-        .hover(|s| s.bg(theme::surface()))
+        .hover(|s| s.bg(theme::surface()).border_color(theme::border()))
         .on_click(cx.listener(move |this, _, _, cx| this.scan_volume(target.clone(), cx)))
-        .child(icon(Icon::Disc, 15.0, theme::text_faint()))
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(30.))
+                .rounded(px(9.))
+                .bg(theme::surface())
+                .group_hover(group.clone(), |s| s.bg(theme::accent_soft()))
+                .child(
+                    icon(Icon::Disc, 14.0, theme::text_faint())
+                        .group_hover(group.clone(), |s| s.text_color(theme::accent_hi())),
+                ),
+        )
         .child(
             div()
                 .flex_1()
@@ -383,6 +478,11 @@ fn image_row(ix: usize, volume: Volume, cx: &mut Context<Burrdisk>) -> AnyElemen
                 .text_right()
                 .text_color(theme::text_muted())
                 .child(format::bytes(volume.total)),
+        )
+        .child(
+            icon(Icon::ChevronRight, 12.0, theme::text_faint())
+                .invisible()
+                .group_hover(group, |s| s.visible()),
         )
         .into_any_element()
 }
