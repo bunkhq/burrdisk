@@ -31,14 +31,17 @@ pub fn text_faint() -> Rgba {
 pub fn accent() -> Rgba {
     rgb(0xf97316)
 }
+pub fn accent_hi() -> Rgba {
+    rgb(0xfdba74)
+}
+pub fn accent_lo() -> Rgba {
+    rgb(0xea580c)
+}
 pub fn accent_soft() -> Rgba {
     rgba(0xf9731624)
 }
 pub fn danger() -> Rgba {
     rgb(0xef4444)
-}
-pub fn danger_hover() -> Rgba {
-    rgb(0xf05252)
 }
 pub fn track() -> Rgba {
     rgba(0xffffff14)

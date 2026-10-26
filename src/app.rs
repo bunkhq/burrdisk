@@ -10,7 +10,7 @@ use gpui::{
 };
 
 use crate::scan::{self, NodeId, NodeKind, Progress, Tree};
-use crate::sunburst::{self, Segment, Target};
+use crate::sunburst::{self, Segment, Target, Zoom};
 use crate::theme;
 use crate::volumes::{self, Volume};
 
@@ -43,12 +43,18 @@ pub struct Explorer {
     pub focus: NodeId,
     pub segments: Rc<Vec<Segment>>,
     pub hover: Option<Hover>,
+    /// What was hovered before, kept briefly so highlights cross-fade.
+    pub prev_hover: Option<Hover>,
+    pub hover_since: Instant,
     pub chart_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// What a drag starting on the chart would carry, captured at mouse-down.
     pub chart_drag: ChartDrag,
     /// Mouse is held down on the chart; hover stays frozen until release.
     pub pressing: bool,
-    pub transition: Instant,
+    /// When the chart first appeared, for its entrance sweep.
+    pub revealed: Instant,
+    /// Camera move between a folder and its parent or child, while it runs.
+    pub zoom: Option<Zoom>,
     pub collected: Vec<NodeId>,
     pub confirm_armed: bool,
     pub trashing: bool,
@@ -80,11 +86,13 @@ pub struct Burrdisk {
     pub volumes: Vec<Volume>,
     pub volumes_loaded: bool,
     pub show_all_images: bool,
+    /// When the disk list was last shown, for its entrance animation.
+    pub home_since: Instant,
     pub screen: Screen,
     _refresh: Option<Task<()>>,
 }
 
-pub const TRANSITION: Duration = Duration::from_millis(420);
+pub const HOVER_FADE: Duration = Duration::from_millis(160);
 
 impl Burrdisk {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -95,6 +103,7 @@ impl Burrdisk {
             volumes: Vec::new(),
             volumes_loaded: false,
             show_all_images: false,
+            home_since: Instant::now(),
             screen: Screen::Home,
             _refresh: None,
         };
@@ -225,10 +234,13 @@ impl Burrdisk {
             focus: Tree::ROOT,
             segments,
             hover: None,
+            prev_hover: None,
+            hover_since: Instant::now(),
             chart_bounds: Rc::default(),
             chart_drag: ChartDrag::default(),
             pressing: false,
-            transition: Instant::now(),
+            revealed: Instant::now(),
+            zoom: None,
             collected: Vec::new(),
             confirm_armed: false,
             trashing: false,
@@ -246,6 +258,7 @@ impl Burrdisk {
 
     pub fn go_home(&mut self, cx: &mut Context<Self>) {
         self.screen = Screen::Home;
+        self.home_since = Instant::now();
         self.refresh_volumes(cx);
         cx.notify();
     }
@@ -329,9 +342,13 @@ impl Burrdisk {
                     }
                 }
                 // Never leave the view focused on something that no longer exists.
-                let root_reachable = explorer.tree.lineage(explorer.focus).first() == Some(&Tree::ROOT);
-                if !root_reachable {
+                let lineage = explorer.tree.lineage(explorer.focus);
+                let detached = lineage
+                    .windows(2)
+                    .any(|w| !explorer.tree.node(w[0]).children.contains(&w[1]));
+                if detached {
                     explorer.focus = Tree::ROOT;
+                    explorer.zoom = None;
                 }
                 explorer.trashing = false;
                 explorer.notice = Some(if failed.is_empty() {
@@ -371,10 +388,35 @@ impl Explorer {
         if self.tree.node(id).kind != NodeKind::Dir || id == self.focus {
             return;
         }
+        self.zoom = Zoom::new(&self.tree, self.focus, id);
         self.focus = id;
         self.hover = None;
-        self.transition = Instant::now();
+        self.prev_hover = None;
         self.relayout();
+    }
+
+    pub fn set_hover(&mut self, hover: Option<Hover>) {
+        if hover == self.hover {
+            return;
+        }
+        self.prev_hover = self.hover;
+        self.hover = hover;
+        self.hover_since = Instant::now();
+    }
+
+    /// 0..1 progress of the latest hover change.
+    pub fn hover_progress(&self) -> f32 {
+        sunburst::ease_out_cubic((self.hover_since.elapsed().as_secs_f32() / HOVER_FADE.as_secs_f32()).min(1.0))
+    }
+
+    /// Whether the chart still needs frames. Clears a finished zoom as a side effect.
+    pub fn tick(&mut self) -> bool {
+        if self.zoom.as_ref().is_some_and(|z| z.finished()) {
+            self.zoom = None;
+        }
+        self.zoom.is_some()
+            || self.revealed.elapsed() < sunburst::REVEAL_DURATION
+            || self.hover_since.elapsed() < HOVER_FADE
     }
 
     pub fn relayout(&mut self) {
