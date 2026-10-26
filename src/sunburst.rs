@@ -509,7 +509,10 @@ pub fn paint_arc(window: &mut Window, bounds: Bounds<Pixels>, start: f32, end: f
     let color_at = |u: f32| {
         let mut c = fill;
         if tail {
-            c.a = u * u;
+            // Fade into the track with opaque colors; translucent pieces would
+            // double up where they overlap and show as stripes.
+            let track_on_bg = Hsla { h: fill.h, s: 0.03, l: 0.153, a: 1.0 };
+            c = lerp_hsla(track_on_bg, fill, u * u);
         } else {
             c.l = (fill.l - 0.12 + 0.16 * u).clamp(0.0, 1.0);
         }
