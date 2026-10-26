@@ -2,16 +2,17 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, ElementId, FontWeight, Hsla, IntoElement,
-    MouseButton, MouseMoveEvent, Pixels, Point, Render, SharedString, Window, canvas, div,
+    MouseButton, MouseMoveEvent, Pixels, Point, Render, Window, canvas, div,
     ease_out_quint, linear_color_stop, linear_gradient, prelude::*, px, relative,
 };
 
-use crate::app::{Burrdisk, ChartDrag, DragItem, Explorer, Hover, Screen};
+use crate::app::{Burrdisk, ChartDrag, DragItem, Explorer, Hover, NOTICE_DURATION, Notice, Screen};
 use crate::format;
 use crate::scan::{NodeId, NodeKind, Tree};
 use crate::sunburst::{self, Geometry, Hit, PaintState, Segment, Target, View};
 use crate::theme;
-use crate::ui::components::{ButtonStyle, Icon, button, glow, icon, icon_button, icon_label_button};
+use crate::ui::components::{ButtonStyle, Icon, amount, button, glow, icon, icon_button, icon_label_button};
+use crate::ui::fx;
 
 /// Rows listed in the sidebar before the rest are summarized.
 const MAX_ROWS: usize = 200;
@@ -41,8 +42,13 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         window.request_animation_frame();
     }
     let explorer = &*explorer;
+    if explorer.notice.is_some() {
+        // Keeps the toast's fade-out moving.
+        window.request_animation_frame();
+    }
 
     div()
+        .relative()
         .flex()
         .flex_col()
         .size_full()
@@ -56,6 +62,59 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
                 .child(sidebar(explorer, cx)),
         )
         .child(tray(explorer, cx))
+        .children(explorer.notice.clone().map(toast))
+        .into_any_element()
+}
+
+/// A pill floating above the tray with the result of the last Trash operation.
+fn toast(notice: Notice) -> AnyElement {
+    let tone: Hsla = if notice.error { theme::danger().into() } else { gpui::hsla(0.40, 0.6, 0.55, 1.0) };
+    let glyph = if notice.error { Icon::X } else { Icon::Trash };
+    let left = NOTICE_DURATION.as_secs_f32() - notice.shown.elapsed().as_secs_f32();
+    div()
+        .absolute()
+        .left_0()
+        .right_0()
+        .bottom(px(96.))
+        .flex()
+        .justify_center()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2p5()
+                .max_w(px(640.))
+                .min_w_0()
+                .pl_2()
+                .pr_4()
+                .py_2()
+                .rounded(px(14.))
+                .bg(theme::raised())
+                .border_1()
+                .border_color(tone.opacity(0.45))
+                .shadow(glow(tone, 1.2))
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .justify_center()
+                        .size(px(26.))
+                        .rounded_full()
+                        .bg(tone.opacity(0.2))
+                        .child(icon(glyph, 13.0, tone)),
+                )
+                .child(div().text_sm().min_w_0().child(notice.text.clone())),
+        )
+        .with_animation(
+            ElementId::Name(format!("toast-{:?}", notice.shown).into()),
+            Animation::new(Duration::from_millis(320)).with_easing(ease_out_quint()),
+            move |el, t| {
+                // Fade back out over the last half second.
+                let out = (left / 0.5).clamp(0.0, 1.0);
+                el.opacity(t * out).mb(px(-12. * (1. - t)))
+            },
+        )
         .into_any_element()
 }
 
@@ -88,16 +147,20 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
                 .children(lineage.into_iter().enumerate().flat_map(|(ix, id)| {
                     let name = explorer.tree.node(id).name.to_string();
                     let is_last = ix == last;
+                    let t = fx::hover(("crumb", ix));
                     let crumb = div()
                         .id(("crumb", ix))
+                        .on_hover(fx::on_hover(("crumb", ix)))
                         .px_2p5()
                         .py_1()
                         .rounded(px(7.))
                         .border_1()
                         .border_color(gpui::transparent_black())
                         .text_sm()
-                        .flex_none()
+                        .flex_shrink()
+                        .min_w(px(36.))
                         .max_w(px(220.))
+                        .whitespace_nowrap()
                         .truncate()
                         .when(is_last, |s| {
                             s.text_color(theme::accent_hi())
@@ -106,9 +169,9 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
                                 .border_color(Hsla::from(theme::accent()).opacity(0.22))
                         })
                         .when(!is_last, |s| {
-                            s.text_color(theme::text_muted())
+                            s.text_color(fx::mix(theme::text_muted(), theme::text(), t))
+                                .bg(fx::mix(gpui::transparent_black(), theme::raised(), t))
                                 .cursor_pointer()
-                                .hover(|s| s.bg(theme::raised()).text_color(theme::text()))
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(explorer) = this.explorer() {
@@ -164,11 +227,12 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
             (node.name.to_string(), node.size, "")
         }
     };
-    let center_width = explorer
-        .chart_bounds
-        .get()
-        .map(|b| Geometry::new(b).inner * 1.6)
-        .unwrap_or(150.0);
+    // The label lives inside the center disc, so it scales with the chart.
+    let inner = explorer.chart_bounds.get().map_or(80.0, |b| Geometry::new(b).inner);
+    let center_width = inner * 1.55;
+    let name_size = (inner * 0.13).clamp(11.0, 15.0);
+    let value_size = (inner * 0.25).clamp(17.0, 34.0);
+    let hint_size = (inner * 0.105).clamp(10.0, 12.5);
 
     let chart_drag = explorer.chart_drag.clone();
     let going_up = explorer.hover == Some(Hover::Center) && explorer.focus != Tree::ROOT;
@@ -195,7 +259,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                 }
             });
             if hover != explorer.hover {
-                explorer.set_hover(hover);
+                explorer.set_chart_hover(hover);
                 cx.notify();
             }
         }))
@@ -204,7 +268,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                 && !hovered
                 && !explorer.pressing
             {
-                explorer.set_hover(None);
+                explorer.set_chart_hover(None);
                 cx.notify();
             }
         }))
@@ -232,7 +296,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                     && explorer.pressing
                 {
                     explorer.pressing = false;
-                    explorer.set_hover(None);
+                    explorer.set_chart_hover(None);
                     cx.notify();
                 }
             }),
@@ -291,19 +355,30 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                             div()
                                 .w_full()
                                 .text_center()
-                                .text_sm()
+                                .text_size(px(name_size))
                                 .text_color(if going_up { theme::accent_hi() } else { theme::text_muted() })
+                                .whitespace_nowrap()
                                 .truncate()
                                 .child(label_name),
                         )
                         .child(
                             div()
-                                .text_size(px(26.))
+                                .text_size(px(value_size))
                                 .font_weight(FontWeight::BOLD)
+                                .whitespace_nowrap()
                                 .child(format::bytes(label_size)),
                         )
                         .when(!label_hint.is_empty(), |s| {
-                            s.child(div().text_xs().text_color(theme::text_faint()).child(label_hint))
+                            s.child(
+                                div()
+                                    .w_full()
+                                    .text_center()
+                                    .text_size(px(hint_size))
+                                    .text_color(theme::text_faint())
+                                    .whitespace_nowrap()
+                                    .truncate()
+                                    .child(label_hint),
+                            )
                         })
                         .with_animation(
                             ElementId::Name(format!("center-{label_key}").into()),
@@ -374,22 +449,24 @@ fn smaller_summary(explorer: &Explorer, parent: NodeId) -> (usize, u64) {
 }
 
 fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
-    let focus = explorer.tree.node(explorer.focus);
+    let listed = explorer.listed();
+    let previewing = explorer.preview.is_some();
+    let focus = explorer.tree.node(listed);
     let focus_size = focus.size.max(1);
     let hovered = explorer.hovered_node();
     let children: Vec<NodeId> = focus.children.iter().copied().take(MAX_ROWS).collect();
 
     let remaining = focus.children.len().saturating_sub(MAX_ROWS);
-    let focus_path = explorer.tree.path(explorer.focus);
+    let focus_path = explorer.tree.path(listed);
     let items = focus.items;
     let (focus_num, focus_unit) = format::bytes_parts(focus.size);
 
-    let focus_id = explorer.focus;
     let rows = children.iter().copied().enumerate().map(|(ix, id)| {
         let node = explorer.tree.node(id);
         let color = row_color(explorer, id);
         let ratio = node.size as f32 / focus_size as f32;
         let is_hovered = hovered == Some(id);
+        let t = fx::track(("row", id as usize), is_hovered);
         let collected = explorer.is_collected(id);
         let kind = node.kind;
         let name = node.name.to_string();
@@ -416,15 +493,12 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
             .mx_2()
             .rounded(px(11.))
             .border_1()
-            .border_color(gpui::transparent_black())
-            .when(is_hovered, |s| {
-                s.bg(linear_gradient(
-                    90.,
-                    linear_color_stop(color.opacity(0.16), 0.),
-                    linear_color_stop(color.opacity(0.03), 1.),
-                ))
-                .border_color(color.opacity(0.28))
-            })
+            .border_color(color.opacity(0.28 * t))
+            .bg(linear_gradient(
+                90.,
+                linear_color_stop(color.opacity(0.16 * t), 0.),
+                linear_color_stop(color.opacity(0.03 * t), 1.),
+            ))
             .when(kind == NodeKind::Dir, |s| s.cursor_pointer())
             .when(collected, |s| s.opacity(0.4))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
@@ -460,10 +534,10 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                     .justify_center()
                     .size(px(32.))
                     .rounded(px(9.))
-                    .bg(color.opacity(if is_hovered { 0.30 } else { 0.16 }))
+                    .bg(color.opacity(0.16 + 0.14 * t))
                     .border_1()
                     .border_color(color.opacity(0.30))
-                    .when(is_hovered, |s| s.shadow(glow(color, 1.2)))
+                    .when(t > 0.0, |s| s.shadow(glow(color, 1.2 * t)))
                     .child(icon(glyph, 15.0, Hsla { l: (color.l + 0.12).min(0.9), ..color })),
             )
             .child(
@@ -492,7 +566,7 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                                 div()
                                     .h_full()
                                     .rounded_full()
-                                    .bg(color.opacity(if is_hovered { 1.0 } else { 0.75 }))
+                                    .bg(color.opacity(0.75 + 0.25 * t))
                                     .w(relative(ratio.clamp(0.015, 1.0))),
                             ),
                     )
@@ -509,8 +583,8 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                     .border_1()
                     .border_color(theme::border())
                     .shadow_md()
-                    .invisible()
-                    .group_hover("row", |s| s.visible())
+                    .opacity(t)
+                    .when(t < 0.05, |s| s.invisible())
                     .when_some(path, |s, path| {
                         s.child(
                             icon_button(("reveal", id as usize), Icon::ArrowUpRight, move |_, _, cx| {
@@ -549,19 +623,21 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                     .child(div().text_xs().text_color(theme::text_faint()).child(percent)),
             )
             .child(div().w(px(12.)).flex_none().when(kind == NodeKind::Dir, |s| {
-                s.child(icon(Icon::ChevronRight, 12.0, if is_hovered { theme::text() } else { theme::text_faint() }))
+                s.child(icon(Icon::ChevronRight, 12.0, fx::mix(theme::text_faint(), theme::text(), t)))
             }));
 
         // The first screenful cascades in each time the folder changes.
+        // Peeking via the chart swaps lists often, so it uses a quicker, flatter fade.
         if ix < ANIMATED_ROWS {
-            let delay = ix as f32 * 0.028;
-            let total = delay + 0.32;
+            let (step, length, rise) = if previewing { (0.012, 0.18, 4.0) } else { (0.024, 0.30, 10.0) };
+            let delay = ix as f32 * step;
+            let total = delay + length;
             row.with_animation(
-                ElementId::Name(format!("row-in-{focus_id}-{id}").into()),
+                ElementId::Name(format!("row-in-{listed}-{id}").into()),
                 Animation::new(Duration::from_secs_f32(total)),
                 move |el, t| {
-                    let local = sunburst::ease_out_cubic(((t * total - delay) / 0.32).clamp(0.0, 1.0));
-                    el.opacity(local).top(px(10. * (1. - local)))
+                    let local = sunburst::ease_out_cubic(((t * total - delay) / length).clamp(0.0, 1.0));
+                    el.opacity(local).top(px(rise * (1. - local)))
                 },
             )
             .into_any_element()
@@ -588,7 +664,7 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
         })
         .collect();
 
-    let footer = (explorer.focus == Tree::ROOT)
+    let footer = (listed == Tree::ROOT)
         .then(|| explorer.target.volume.clone())
         .flatten()
         .map(|volume| {
@@ -608,7 +684,7 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
         });
 
     let hidden_hint = cfg!(target_os = "macos")
-        && explorer.focus == Tree::ROOT
+        && listed == Tree::ROOT
         && explorer.target.path == std::path::Path::new("/")
         && explorer
             .tree
@@ -638,16 +714,30 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                 .pb_3()
                 .child(
                     div()
+                        .h(px(14.))
+                        .text_xs()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme::accent_hi())
+                        .when(previewing, |s| s.child("PEEKING INSIDE"))
+                        .when(!previewing, |s| s.text_color(theme::text_faint()).child("CURRENT FOLDER")),
+                )
+                .child(
+                    div()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(icon(Icon::FolderOpen, 16.0, theme::text_muted()))
+                        .child(icon(
+                            Icon::FolderOpen,
+                            16.0,
+                            if previewing { theme::accent_hi() } else { theme::text_muted() },
+                        ))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .text_base()
                                 .font_weight(FontWeight::SEMIBOLD)
+                                .whitespace_nowrap()
                                 .truncate()
                                 .child(focus.name.to_string()),
                         )
@@ -661,15 +751,15 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                 .child(
                     div()
                         .flex()
-                        .items_baseline()
-                        .gap_1p5()
-                        .child(div().text_size(px(22.)).font_weight(FontWeight::BOLD).child(focus_num))
-                        .child(div().text_sm().text_color(theme::text_muted()).child(focus_unit))
+                        .items_end()
+                        .child(amount(focus_num, focus_unit, 24.0, 14.0))
                         .child(
                             div()
                                 .ml_auto()
+                                .mb(px(4.))
                                 .text_xs()
                                 .text_color(theme::text_faint())
+                                .whitespace_nowrap()
                                 .child(format!("{} items", format::count(items))),
                         ),
                 )
@@ -884,30 +974,27 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                     .flex()
                     .flex_col()
                     .flex_1()
-                    .child(div().text_sm().text_color(theme::text_muted()).child(
-                        explorer
-                            .notice
-                            .clone()
-                            .unwrap_or_else(|| SharedString::from("Drop files and folders here")),
-                    ))
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::text_muted())
+                            .whitespace_nowrap()
+                            .truncate()
+                            .child("Drop files and folders here"),
+                    )
                     .child(
                         div()
                             .text_xs()
                             .text_color(theme::text_faint())
+                            .whitespace_nowrap()
+                            .truncate()
                             .child("Collect what you want gone, then move it all to the Trash at once."),
                     ),
             )
         })
         .when(!empty, |s| {
-            s.child(
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_baseline()
-                    .gap_1()
-                    .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).child(num))
-                    .child(div().text_sm().text_color(theme::text_muted()).child(unit)),
-            )
+            s.child(amount(num, unit, 22.0, 13.0).flex_none())
             .child(
                 div()
                     .id("chips")
