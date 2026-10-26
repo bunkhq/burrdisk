@@ -1,0 +1,30 @@
+[package]
+name = "burrdisk"
+version = "0.1.0"
+edition = "2024"
+description = "A fast, friendly disk space visualizer"
+license = "MIT"
+repository = "https://github.com/trelakor/burrdisk"
+
+[dependencies]
+anyhow = "1"
+gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }
+rayon = "1.12"
+sysinfo = { version = "0.39", default-features = false, features = ["disk"] }
+trash = "5"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[features]
+default = ["runtime_shaders"]
+# Compile Metal shaders at runtime so the app builds without a full Xcode install.
+runtime_shaders = ["gpui/runtime_shaders"]
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
