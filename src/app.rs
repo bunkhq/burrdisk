@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -37,8 +38,15 @@ pub struct Scanning {
     _task: Task<()>,
 }
 
+pub struct CachedScan {
+    pub target: ScanTarget,
+    pub tree: Tree,
+    pub scanned_at: Instant,
+}
+
 pub struct Explorer {
     pub target: ScanTarget,
+    pub scanned_at: Instant,
     pub tree: Tree,
     pub focus: NodeId,
     pub segments: Rc<Vec<Segment>>,
@@ -46,6 +54,8 @@ pub struct Explorer {
     /// What was hovered before, kept briefly so highlights cross-fade.
     pub prev_hover: Option<Hover>,
     pub hover_since: Instant,
+    /// Folder the sidebar shows while the chart is hovered, instead of the focus.
+    pub preview: Option<NodeId>,
     pub chart_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// What a drag starting on the chart would carry, captured at mouse-down.
     pub chart_drag: ChartDrag,
@@ -58,8 +68,18 @@ pub struct Explorer {
     pub collected: Vec<NodeId>,
     pub confirm_armed: bool,
     pub trashing: bool,
-    pub notice: Option<SharedString>,
+    pub notice: Option<Notice>,
 }
+
+/// A short message shown above the tray, e.g. the result of moving items to the Trash.
+#[derive(Clone)]
+pub struct Notice {
+    pub text: SharedString,
+    pub error: bool,
+    pub shown: Instant,
+}
+
+pub const NOTICE_DURATION: Duration = Duration::from_secs(6);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hover {
@@ -86,6 +106,10 @@ pub struct Burrdisk {
     pub volumes: Vec<Volume>,
     pub volumes_loaded: bool,
     pub show_all_images: bool,
+    /// When "Show all" was last toggled, for the expand/collapse animation.
+    pub images_toggled: Option<Instant>,
+    /// Finished scans kept for this session, by root path.
+    pub scans: HashMap<PathBuf, CachedScan>,
     /// When the disk list was last shown, for its entrance animation.
     pub home_since: Instant,
     pub screen: Screen,
@@ -103,6 +127,8 @@ impl Burrdisk {
             volumes: Vec::new(),
             volumes_loaded: false,
             show_all_images: false,
+            images_toggled: None,
+            scans: HashMap::new(),
             home_since: Instant::now(),
             screen: Screen::Home,
             _refresh: None,
@@ -136,8 +162,21 @@ impl Burrdisk {
         }));
     }
 
+    /// When `path` was last scanned this session, if it was.
+    pub fn scanned_at(&self, path: &std::path::Path) -> Option<Instant> {
+        self.scans.get(path).map(|scan| scan.scanned_at)
+    }
+
+    /// Opens a previous scan of the target if there is one, otherwise scans it.
+    pub fn open(&mut self, target: ScanTarget, cx: &mut Context<Self>) {
+        match self.scans.remove(&target.path) {
+            Some(scan) => self.open_explorer(scan.target, scan.tree, scan.scanned_at, cx),
+            None => self.start_scan(target, cx),
+        }
+    }
+
     pub fn scan_volume(&mut self, volume: Volume, cx: &mut Context<Self>) {
-        self.start_scan(
+        self.open(
             ScanTarget {
                 path: volume.mount.clone(),
                 name: volume.name.clone(),
@@ -162,7 +201,7 @@ impl Burrdisk {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
-                this.start_scan(ScanTarget { path, name, volume: None }, cx);
+                this.open(ScanTarget { path, name, volume: None }, cx);
             })
             .ok();
         })
@@ -227,15 +266,21 @@ impl Burrdisk {
                 tree.add_hidden_space(hidden);
             }
         }
+        self.open_explorer(target, tree, Instant::now(), cx);
+    }
+
+    fn open_explorer(&mut self, target: ScanTarget, tree: Tree, scanned_at: Instant, cx: &mut Context<Self>) {
         let segments = Rc::new(sunburst::layout(&tree, Tree::ROOT));
         self.screen = Screen::Explorer(Explorer {
             target,
+            scanned_at,
             tree,
             focus: Tree::ROOT,
             segments,
             hover: None,
             prev_hover: None,
             hover_since: Instant::now(),
+            preview: None,
             chart_bounds: Rc::default(),
             chart_drag: ChartDrag::default(),
             pressing: false,
@@ -257,7 +302,17 @@ impl Burrdisk {
     }
 
     pub fn go_home(&mut self, cx: &mut Context<Self>) {
-        self.screen = Screen::Home;
+        // Keep the finished scan so returning to it this session is instant.
+        if let Screen::Explorer(explorer) = std::mem::replace(&mut self.screen, Screen::Home) {
+            self.scans.insert(
+                explorer.target.path.clone(),
+                CachedScan {
+                    target: explorer.target,
+                    tree: explorer.tree,
+                    scanned_at: explorer.scanned_at,
+                },
+            );
+        }
         self.home_since = Instant::now();
         self.refresh_volumes(cx);
         cx.notify();
@@ -313,24 +368,14 @@ impl Burrdisk {
             .iter()
             .map(|id| (*id, explorer.tree.path(*id)))
             .collect();
-        let job = cx.background_executor().spawn(async move {
-            let mut context = trash::TrashContext::default();
-            #[cfg(target_os = "macos")]
-            {
-                use trash::macos::{DeleteMethod, TrashContextExtMacos};
-                context.set_delete_method(DeleteMethod::NsFileManager);
-            }
-            items
-                .into_iter()
-                .map(|(id, path)| (id, context.delete(&path).map_err(|e| e.to_string())))
-                .collect::<Vec<_>>()
-        });
+        let job = cx.background_executor().spawn(async move { move_to_trash(items) });
         cx.spawn(async move |this, cx| {
             let results = job.await;
             this.update(cx, |this, cx| {
                 let Some(explorer) = this.explorer() else { return };
                 let mut freed = 0;
                 let mut failed = Vec::new();
+                let mut reason = None;
                 for (id, result) in results {
                     match result {
                         Ok(()) => {
@@ -338,7 +383,10 @@ impl Burrdisk {
                             explorer.collected.retain(|c| *c != id);
                             explorer.tree.remove(id);
                         }
-                        Err(_) => failed.push(explorer.tree.node(id).name.to_string()),
+                        Err(error) => {
+                            failed.push(explorer.tree.node(id).name.to_string());
+                            reason.get_or_insert(error);
+                        }
                     }
                 }
                 // Never leave the view focused on something that no longer exists.
@@ -351,18 +399,42 @@ impl Burrdisk {
                     explorer.zoom = None;
                 }
                 explorer.trashing = false;
-                explorer.notice = Some(if failed.is_empty() {
-                    format!("Moved {} to the Trash", crate::format::bytes(freed)).into()
-                } else {
-                    format!("Couldn't move {} to the Trash", failed.join(", ")).into()
-                });
+                let text = match (failed.len(), reason) {
+                    (0, _) => format!("Moved {} to the Trash", crate::format::bytes(freed)),
+                    (n, Some(reason)) => {
+                        let what = if n == 1 { failed[0].clone() } else { format!("{n} items") };
+                        format!("Couldn't move {what} to the Trash: {reason}")
+                    }
+                    _ => unreachable!(),
+                };
+                explorer.zoom = None;
                 explorer.relayout();
+                this.show_notice(text, !failed.is_empty(), cx);
                 cx.notify();
             })
             .ok();
         })
         .detach();
         cx.notify();
+    }
+
+    pub fn show_notice(&mut self, text: String, error: bool, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        let shown = Instant::now();
+        explorer.notice = Some(Notice { text: text.into(), error, shown });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NOTICE_DURATION).await;
+            this.update(cx, |this, cx| {
+                if let Some(explorer) = this.explorer()
+                    && explorer.notice.as_ref().is_some_and(|n| n.shown == shown)
+                {
+                    explorer.notice = None;
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub fn arm_confirm(&mut self, cx: &mut Context<Self>) {
@@ -392,7 +464,26 @@ impl Explorer {
         self.focus = id;
         self.hover = None;
         self.prev_hover = None;
+        self.preview = None;
         self.relayout();
+    }
+
+    /// Hover coming from the chart also previews the hovered folder in the sidebar
+    /// (or, for a file, the folder it's in).
+    pub fn set_chart_hover(&mut self, hover: Option<Hover>) {
+        self.set_hover(hover);
+        let folder = match hover {
+            Some(Hover::Target(Target::Node(id))) if self.tree.node(id).kind == NodeKind::Dir => Some(id),
+            Some(Hover::Target(Target::Node(id))) => self.tree.node(id).parent,
+            Some(Hover::Target(Target::Smaller(parent))) => Some(parent),
+            _ => None,
+        };
+        self.preview = folder.filter(|f| *f != self.focus);
+    }
+
+    /// The folder whose contents the sidebar lists.
+    pub fn listed(&self) -> NodeId {
+        self.preview.unwrap_or(self.focus)
     }
 
     pub fn set_hover(&mut self, hover: Option<Hover>) {
@@ -435,7 +526,6 @@ impl Explorer {
         self.collected.retain(|c| !tree.is_ancestor(id, *c));
         self.collected.push(id);
         self.confirm_armed = false;
-        self.notice = None;
     }
 
     pub fn uncollect(&mut self, id: NodeId) {
@@ -476,6 +566,53 @@ impl Explorer {
     }
 }
 
+/// Moves files and folders to the Trash. The Foundation API is tried first; whatever
+/// it refuses (it does when ~/.Trash has the wrong owner, among other cases) is
+/// handed to Finder in one batch, which is what a drag to the Trash would do.
+fn move_to_trash(items: Vec<(NodeId, PathBuf)>) -> Vec<(NodeId, Result<(), String>)> {
+    #[cfg(target_os = "macos")]
+    {
+        use trash::macos::{DeleteMethod, TrashContextExtMacos};
+        let mut context = trash::TrashContext::default();
+        context.set_delete_method(DeleteMethod::NsFileManager);
+        let (mut done, refused): (Vec<_>, Vec<_>) = items
+            .into_iter()
+            .map(|(id, path)| {
+                let ok = context.delete(&path).is_ok();
+                (id, path, ok)
+            })
+            .partition(|(_, _, ok)| *ok);
+        let mut results: Vec<(NodeId, Result<(), String>)> = done.drain(..).map(|(id, _, _)| (id, Ok(()))).collect();
+        if !refused.is_empty() {
+            context.set_delete_method(DeleteMethod::Finder);
+            let paths: Vec<&PathBuf> = refused.iter().map(|(_, path, _)| path).collect();
+            let outcome = context.delete_all(paths).map_err(|error| match error {
+                trash::Error::Unknown { description } => description
+                    .rsplit_once("failed: ")
+                    .map_or(description.clone(), |(_, tail)| tail.to_string()),
+                other => other.to_string(),
+            });
+            for (id, path, _) in refused {
+                // Finder works on the batch as a whole; check what actually left.
+                let result = match &outcome {
+                    Ok(()) => Ok(()),
+                    Err(_) if !path.exists() => Ok(()),
+                    Err(error) => Err(error.clone()),
+                };
+                results.push((id, result));
+            }
+        }
+        results
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        items
+            .into_iter()
+            .map(|(id, path)| (id, trash::delete(&path).map_err(|error| error.to_string())))
+            .collect()
+    }
+}
+
 /// Resolves to `Some` when `job` finishes first, or `None` when `tick` does.
 async fn futures_select<T>(
     job: &mut std::pin::Pin<&mut impl std::future::Future<Output = T>>,
@@ -503,6 +640,9 @@ impl Render for Burrdisk {
             Screen::Scanning(_) => crate::ui::scanning::render(self, window, cx).into_any_element(),
             Screen::Explorer(_) => crate::ui::explorer::render(self, window, cx).into_any_element(),
         };
+        if crate::ui::fx::animating() {
+            window.request_animation_frame();
+        }
         div()
             .id("root")
             .key_context("Burrdisk")
