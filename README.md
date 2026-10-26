@@ -10,14 +10,14 @@ A fast, friendly disk space visualizer for macOS, written in Rust with [GPUI](ht
 
 ## Build
 
-Requires Rust 1.88+ and the Xcode Command Line Tools.
+Requires Rust 1.88+ and Xcode with the Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`).
 
 ```sh
 cargo run --release              # open the disk picker
 cargo run --release -- ~/Library # scan a folder directly
 ```
 
-Metal shaders compile at runtime by default, so a full Xcode install isn't needed.
+Without Xcode, build with `--features runtime_shaders` to compile Metal shaders at launch instead.
 
 ## Keyboard
 

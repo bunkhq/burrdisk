@@ -17,8 +17,8 @@ trash = "5"
 libc = "0.2"
 
 [features]
-default = ["runtime_shaders"]
-# Compile Metal shaders at runtime so the app builds without a full Xcode install.
+default = []
+# Compile Metal shaders at runtime instead, for building without a full Xcode install.
 runtime_shaders = ["gpui/runtime_shaders"]
 
 [profile.dev.package."*"]
