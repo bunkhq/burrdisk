@@ -1,2 +1,4 @@
 /target
 .DS_Store
+# Impeccable engine binary; its launcher downloads it on first run.
+/.claude/skills/impeccable/scripts/bin/
