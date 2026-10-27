@@ -41,15 +41,6 @@ impl Volume {
         }
     }
 
-    pub fn subtitle(&self) -> &'static str {
-        match self.kind {
-            VolumeKind::Startup => "Startup disk",
-            VolumeKind::Internal => "Internal disk",
-            VolumeKind::External => "External disk",
-            VolumeKind::Network => "Network volume",
-            VolumeKind::DiskImage => "Disk image",
-        }
-    }
 }
 
 pub fn list() -> Vec<Volume> {
@@ -169,4 +160,30 @@ fn disk_image_mounts() -> Vec<PathBuf> {
 #[cfg(not(target_os = "macos"))]
 fn disk_image_mounts() -> Vec<PathBuf> {
     Vec::new()
+}
+
+/// Opens Finder's Get Info window for `path`.
+pub fn get_info(path: &Path) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("/usr/bin/osascript")
+            .args([
+                "-e",
+                "on run argv",
+                "-e",
+                "tell application \"Finder\"",
+                "-e",
+                "activate",
+                "-e",
+                "open information window of (POSIX file (item 1 of argv) as alias)",
+                "-e",
+                "end tell",
+                "-e",
+                "end run",
+            ])
+            .arg(path)
+            .spawn();
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = path;
 }

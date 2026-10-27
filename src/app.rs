@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, Context, FocusHandle, PathPromptOptions, Pixels, Render, SharedString, Task,
+    Bounds, Context, FocusHandle, PathPromptOptions, Pixels, Point, Render, SharedString, Task,
     Window, actions, div, prelude::*,
 };
 
@@ -15,7 +15,7 @@ use crate::sunburst::{self, Segment, Target, Zoom};
 use crate::theme;
 use crate::volumes::{self, Volume};
 
-actions!(burrdisk, [GoUp, Quit]);
+actions!(burrdisk, [GoUp, GoBack, GoForward, Preview, Collect, Quit]);
 
 #[derive(Clone)]
 pub struct ScanTarget {
@@ -23,6 +23,8 @@ pub struct ScanTarget {
     pub name: String,
     /// Set when scanning a whole volume; enables free/hidden space accounting.
     pub volume: Option<Volume>,
+    /// Scan as root through an authorized helper process, to see folders the user can't.
+    pub admin: bool,
 }
 
 pub enum Screen {
@@ -42,6 +44,16 @@ pub struct CachedScan {
     pub target: ScanTarget,
     pub tree: Tree,
     pub scanned_at: Instant,
+    /// The chart's top ring, kept so the home screen can draw the disk's burr.
+    pub lobes: Vec<Lobe>,
+}
+
+/// One top-level slice of a scanned disk: its span in turns and chart color.
+#[derive(Clone, Copy)]
+pub struct Lobe {
+    pub start: f32,
+    pub end: f32,
+    pub color: gpui::Hsla,
 }
 
 pub struct Explorer {
@@ -65,8 +77,13 @@ pub struct Explorer {
     pub revealed: Instant,
     /// Camera move between a folder and its parent or child, while it runs.
     pub zoom: Option<Zoom>,
+    /// Deepest folder visited along the current path; Forward walks back down toward it.
+    pub trail: NodeId,
+    /// Item whose right-click menu is open, and where the click was.
+    pub context: Option<(NodeId, Point<Pixels>)>,
     pub collected: Vec<NodeId>,
-    pub confirm_armed: bool,
+    /// When "Move to Trash" was pressed; the move starts once the countdown runs out.
+    pub countdown: Option<Instant>,
     pub trashing: bool,
     pub notice: Option<Notice>,
 }
@@ -80,6 +97,8 @@ pub struct Notice {
 }
 
 pub const NOTICE_DURATION: Duration = Duration::from_secs(6);
+/// Grace period between pressing "Move to Trash" and anything being moved.
+pub const TRASH_COUNTDOWN: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Hover {
@@ -113,6 +132,8 @@ pub struct Burrdisk {
     /// When the disk list was last shown, for its entrance animation.
     pub home_since: Instant,
     pub screen: Screen,
+    /// Mount point whose actions menu is open on the home screen.
+    pub menu: Option<PathBuf>,
     _refresh: Option<Task<()>>,
 }
 
@@ -131,6 +152,7 @@ impl Burrdisk {
             scans: HashMap::new(),
             home_since: Instant::now(),
             screen: Screen::Home,
+            menu: None,
             _refresh: None,
         };
         this.refresh_volumes(cx);
@@ -144,7 +166,7 @@ impl Burrdisk {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| path.display().to_string());
-            this.start_scan(ScanTarget { path, name, volume: None }, cx);
+            this.start_scan(ScanTarget { path, name, volume: None, admin: false }, cx);
         }
         this
     }
@@ -162,9 +184,8 @@ impl Burrdisk {
         }));
     }
 
-    /// When `path` was last scanned this session, if it was.
-    pub fn scanned_at(&self, path: &std::path::Path) -> Option<Instant> {
-        self.scans.get(path).map(|scan| scan.scanned_at)
+    pub fn scanned_as_admin(&self, path: &std::path::Path) -> bool {
+        self.scans.get(path).is_some_and(|scan| scan.target.admin)
     }
 
     /// Opens a previous scan of the target if there is one, otherwise scans it.
@@ -181,9 +202,43 @@ impl Burrdisk {
                 path: volume.mount.clone(),
                 name: volume.name.clone(),
                 volume: Some(volume),
+                admin: false,
             },
             cx,
         );
+    }
+
+    /// Scans a volume from scratch, dropping any cached result, with the latest free space figures.
+    pub fn rescan_volume(&mut self, volume: Volume, admin: bool, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.scans.remove(&volume.mount);
+        let volume = volumes::list().into_iter().find(|v| v.mount == volume.mount).unwrap_or(volume);
+        self.start_scan(
+            ScanTarget {
+                path: volume.mount.clone(),
+                name: volume.name.clone(),
+                volume: Some(volume),
+                admin,
+            },
+            cx,
+        );
+    }
+
+    pub fn forget_scan(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        self.menu = None;
+        self.scans.remove(path);
+        cx.notify();
+    }
+
+    pub fn toggle_menu(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.menu = if self.menu.as_ref() == Some(&path) { None } else { Some(path) };
+        cx.notify();
+    }
+
+    pub fn close_menu(&mut self, cx: &mut Context<Self>) {
+        if self.menu.take().is_some() {
+            cx.notify();
+        }
     }
 
     pub fn pick_folder(&mut self, cx: &mut Context<Self>) {
@@ -201,7 +256,7 @@ impl Burrdisk {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| path.display().to_string());
-                this.open(ScanTarget { path, name, volume: None }, cx);
+                this.open(ScanTarget { path, name, volume: None, admin: false }, cx);
             })
             .ok();
         })
@@ -209,13 +264,21 @@ impl Burrdisk {
     }
 
     pub fn start_scan(&mut self, target: ScanTarget, cx: &mut Context<Self>) {
+        self.menu = None;
         let progress = Arc::new(Progress::default());
+        // An admin scan runs in a root helper that reports through files next to its output.
+        let helper = target.admin.then(scan::HelperFiles::new);
         let job = {
             let progress = progress.clone();
             let path = target.path.clone();
             let name = target.name.clone();
-            cx.background_executor()
-                .spawn(async move { scan::scan(&path, &name, &progress) })
+            let helper = helper.clone();
+            cx.background_executor().spawn(async move {
+                match helper {
+                    Some(files) => scan::scan_as_admin(&path, &name, &files),
+                    None => scan::scan(&path, &name, &progress),
+                }
+            })
         };
 
         // Repaint progress while the walk runs, then hand the tree to the explorer.
@@ -232,7 +295,13 @@ impl Burrdisk {
                         }
                         None => {
                             if progress.cancelled.load(std::sync::atomic::Ordering::Relaxed) {
+                                if let Some(files) = &helper {
+                                    files.cancel();
+                                }
                                 return;
+                            }
+                            if let Some(files) = &helper {
+                                files.read_progress(&progress);
                             }
                             if this.update(cx, |_, cx| cx.notify()).is_err() {
                                 return;
@@ -286,8 +355,10 @@ impl Burrdisk {
             pressing: false,
             revealed: Instant::now(),
             zoom: None,
+            trail: Tree::ROOT,
+            context: None,
             collected: Vec::new(),
-            confirm_armed: false,
+            countdown: None,
             trashing: false,
             notice: None,
         });
@@ -304,12 +375,18 @@ impl Burrdisk {
     pub fn go_home(&mut self, cx: &mut Context<Self>) {
         // Keep the finished scan so returning to it this session is instant.
         if let Screen::Explorer(explorer) = std::mem::replace(&mut self.screen, Screen::Home) {
+            let lobes = sunburst::layout(&explorer.tree, Tree::ROOT)
+                .into_iter()
+                .filter(|s| s.depth == 0)
+                .map(|s| Lobe { start: s.start, end: s.end, color: s.color })
+                .collect();
             self.scans.insert(
                 explorer.target.path.clone(),
                 CachedScan {
                     target: explorer.target,
                     tree: explorer.tree,
                     scanned_at: explorer.scanned_at,
+                    lobes,
                 },
             );
         }
@@ -318,6 +395,7 @@ impl Burrdisk {
         cx.notify();
     }
 
+    /// Rescans whatever the explorer is showing, the same way it was scanned before.
     pub fn rescan(&mut self, cx: &mut Context<Self>) {
         if let Screen::Explorer(explorer) = &self.screen {
             let mut target = explorer.target.clone();
@@ -333,11 +411,14 @@ impl Burrdisk {
 
     fn go_up(&mut self, _: &GoUp, _window: &mut Window, cx: &mut Context<Self>) {
         match &mut self.screen {
-            Screen::Home => {}
+            Screen::Home => self.close_menu(cx),
             Screen::Scanning(_) => self.cancel_scan(cx),
             Screen::Explorer(explorer) => {
-                if explorer.confirm_armed {
-                    explorer.confirm_armed = false;
+                if explorer.context.is_some() {
+                    explorer.context = None;
+                    cx.notify();
+                } else if explorer.countdown.is_some() {
+                    explorer.countdown = None;
                     cx.notify();
                 } else if let Some(parent) = explorer.tree.node(explorer.focus).parent {
                     explorer.set_focus(parent);
@@ -346,6 +427,59 @@ impl Burrdisk {
                     self.go_home(cx);
                 }
             }
+        }
+    }
+
+    /// Steps up to the parent folder; from the disk's top folder, back to the disk list.
+    pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        match explorer.tree.node(explorer.focus).parent {
+            Some(parent) => {
+                explorer.set_focus(parent);
+                cx.notify();
+            }
+            None => self.go_home(cx),
+        }
+    }
+
+    /// Steps one folder down, toward where Back came from, or into a lone subfolder.
+    pub fn go_forward(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        if let Some(next) = explorer.next_folder() {
+            explorer.set_focus(next);
+            cx.notify();
+        }
+    }
+
+    fn on_back(&mut self, _: &GoBack, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_back(cx);
+    }
+
+    fn on_forward(&mut self, _: &GoForward, _: &mut Window, cx: &mut Context<Self>) {
+        self.go_forward(cx);
+    }
+
+    /// The item Space and ⌘⌫ act on: the one with its menu open, else the one hovered.
+    fn keyboard_target(&mut self) -> Option<NodeId> {
+        let explorer = self.explorer()?;
+        explorer.context.map(|(id, _)| id).or_else(|| explorer.hovered_node())
+    }
+
+    fn on_preview(&mut self, _: &Preview, _: &mut Window, _: &mut Context<Self>) {
+        if let Some(id) = self.keyboard_target()
+            && let Some(explorer) = self.explorer()
+        {
+            quick_look(&explorer.tree.path(id));
+        }
+    }
+
+    fn on_collect(&mut self, _: &Collect, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.keyboard_target()
+            && let Some(explorer) = self.explorer()
+        {
+            explorer.collect(id);
+            explorer.context = None;
+            cx.notify();
         }
     }
 
@@ -362,7 +496,7 @@ impl Burrdisk {
             return;
         }
         explorer.trashing = true;
-        explorer.confirm_armed = false;
+        explorer.countdown = None;
         let items: Vec<(NodeId, PathBuf)> = explorer
             .collected
             .iter()
@@ -397,6 +531,9 @@ impl Burrdisk {
                 if detached {
                     explorer.focus = Tree::ROOT;
                     explorer.zoom = None;
+                }
+                if !explorer.tree.is_attached(explorer.trail) {
+                    explorer.trail = explorer.focus;
                 }
                 explorer.trashing = false;
                 let text = match (failed.len(), reason) {
@@ -437,34 +574,74 @@ impl Burrdisk {
         .detach();
     }
 
-    pub fn arm_confirm(&mut self, cx: &mut Context<Self>) {
+    /// Starts the grace period before the collected items move to the Trash.
+    pub fn start_trash_countdown(&mut self, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer() else { return };
-        explorer.confirm_armed = true;
+        if explorer.collected.is_empty() || explorer.trashing {
+            return;
+        }
+        let started = Instant::now();
+        explorer.countdown = Some(started);
         cx.notify();
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(4)).await;
+            cx.background_executor().timer(TRASH_COUNTDOWN).await;
             this.update(cx, |this, cx| {
-                if let Some(explorer) = this.explorer() {
-                    explorer.confirm_armed = false;
-                    cx.notify();
+                // Only the countdown that is still running gets to fire.
+                if this.explorer().is_some_and(|e| e.countdown == Some(started)) {
+                    this.move_collected_to_trash(cx);
                 }
             })
             .ok();
         })
         .detach();
     }
+
+    pub fn stop_trash_countdown(&mut self, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer() {
+            explorer.countdown = None;
+            cx.notify();
+        }
+    }
 }
 
 impl Explorer {
+    /// The focused folder's single subfolder, when there is exactly one.
+    pub fn only_subfolder(&self) -> Option<NodeId> {
+        let mut dirs = self
+            .tree
+            .node(self.focus)
+            .children
+            .iter()
+            .copied()
+            .filter(|c| self.tree.node(*c).kind == NodeKind::Dir);
+        let first = dirs.next()?;
+        dirs.next().is_none().then_some(first)
+    }
+
+    /// The folder Forward opens: the next one down the trail, else a lone subfolder.
+    pub fn next_folder(&self) -> Option<NodeId> {
+        if self.trail != self.focus && self.tree.is_ancestor(self.focus, self.trail) {
+            let lineage = self.tree.lineage(self.trail);
+            let at = lineage.iter().position(|id| *id == self.focus)?;
+            return lineage.get(at + 1).copied();
+        }
+        self.only_subfolder()
+    }
+
     pub fn set_focus(&mut self, id: NodeId) {
         if self.tree.node(id).kind != NodeKind::Dir || id == self.focus {
             return;
         }
         self.zoom = Zoom::new(&self.tree, self.focus, id);
         self.focus = id;
+        // Going up keeps the trail; going anywhere off it starts a new one.
+        if !self.tree.is_ancestor(id, self.trail) {
+            self.trail = id;
+        }
         self.hover = None;
         self.prev_hover = None;
         self.preview = None;
+        self.context = None;
         self.relayout();
     }
 
@@ -506,6 +683,7 @@ impl Explorer {
             self.zoom = None;
         }
         self.zoom.is_some()
+            || self.countdown.is_some()
             || self.revealed.elapsed() < sunburst::REVEAL_DURATION
             || self.hover_since.elapsed() < HOVER_FADE
     }
@@ -525,12 +703,13 @@ impl Explorer {
         let tree = &self.tree;
         self.collected.retain(|c| !tree.is_ancestor(id, *c));
         self.collected.push(id);
-        self.confirm_armed = false;
+        // Changing the pile mid-countdown stops it, so nothing moves that wasn't reviewed.
+        self.countdown = None;
     }
 
     pub fn uncollect(&mut self, id: NodeId) {
         self.collected.retain(|c| *c != id);
-        self.confirm_armed = false;
+        self.countdown = None;
     }
 
     pub fn is_collected(&self, id: NodeId) -> bool {
@@ -564,6 +743,23 @@ impl Explorer {
             .find(|s| s.target == Target::Node(id))
             .map(|s| s.color)
     }
+}
+
+/// Opens a Quick Look panel for a file or folder, as Space does in Finder.
+pub fn quick_look(path: &std::path::Path) {
+    std::process::Command::new("qlmanage")
+        .arg("-p")
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .ok();
+}
+
+/// Opens Terminal in a folder, or in the folder holding a file.
+pub fn open_in_terminal(path: &std::path::Path) {
+    let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+    std::process::Command::new("open").args(["-a", "Terminal"]).arg(dir).spawn().ok();
 }
 
 /// Moves files and folders to the Trash. The Foundation API is tried first; whatever
@@ -648,6 +844,10 @@ impl Render for Burrdisk {
             .key_context("Burrdisk")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::go_up))
+            .on_action(cx.listener(Self::on_back))
+            .on_action(cx.listener(Self::on_forward))
+            .on_action(cx.listener(Self::on_preview))
+            .on_action(cx.listener(Self::on_collect))
             .size_full()
             .flex()
             .flex_col()
