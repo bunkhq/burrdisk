@@ -376,6 +376,9 @@ fn mode_switch(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElem
                         .cursor_pointer()
                         .child(fx::shine(t, gpui::white().opacity(0.34), px(7.)))
                 })
+                // Without this, Windows treats a press here as one on the titlebar's
+                // drag area and the click never arrives.
+                .occlude()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(explorer) = this.explorer() {
                         explorer.set_mode(mode);
