@@ -219,31 +219,6 @@ pub fn icon_button(
         )
 }
 
-/// A thin horizontal capacity bar that fills in when it first appears.
-pub fn bar(id: impl Into<ElementId>, ratio: f32, color: impl Into<Hsla>, height: f32) -> AnyElement {
-    let color = color.into();
-    let ratio = ratio.clamp(0.0, 1.0);
-    let dim = Hsla { l: (color.l - 0.12).max(0.0), ..color };
-    div()
-        .w_full()
-        .h(px(height))
-        .rounded_full()
-        .bg(theme::track())
-        .child(
-            div()
-                .h_full()
-                .rounded_full()
-                .bg(linear_gradient(90., linear_color_stop(dim, 0.), linear_color_stop(color, 1.)))
-                .shadow(vec![shadow(color.opacity(0.45), 0.0, 8.0, -1.0)])
-                .with_animation(
-                    id,
-                    Animation::new(Duration::from_millis(900)).with_easing(ease_out_quint()),
-                    move |el, t| el.w(gpui::relative(ratio * t)),
-                ),
-        )
-        .into_any_element()
-}
-
 /// A number with a smaller unit after it ("38.0 GB"), sharing one baseline.
 /// Both boxes get a line height equal to their font size and are bottom-aligned;
 /// the unit is then lifted by the difference in descent below the baseline.
@@ -275,10 +250,195 @@ pub fn amount(number: impl Into<SharedString>, unit: impl Into<SharedString>, si
         )
 }
 
-pub fn section_label(text: impl Into<SharedString>) -> Div {
+/// A button with a chevron segment beside it that opens a menu of related actions.
+pub fn split_button(
+    id: &str,
+    glyph: Icon,
+    label: impl Into<SharedString>,
+    style: ButtonStyle,
+    on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    on_menu: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> Div {
+    let main = styled_button(SharedString::from(format!("{id}-main")), Some(glyph), label.into(), style, on_click)
+        .rounded_r(px(0.));
+    let chevron = styled_button(SharedString::from(format!("{id}-menu")), None, SharedString::default(), style, on_menu)
+        .w(px(28.))
+        .px_0()
+        .gap_0()
+        .rounded_l(px(0.))
+        .border_l_0()
+        .child(icon(Icon::ChevronDown, 13.0, if style == ButtonStyle::Primary { rgb(0x1f0b00) } else { theme::text_muted() }));
+    // A hairline in the button's own ink separates the two halves.
+    let seam: Hsla = if style == ButtonStyle::Primary { rgba(0x1f0b0040).into() } else { rgba(0xffffff1f).into() };
     div()
-        .text_xs()
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_color(theme::text_faint())
-        .child(text.into().to_uppercase())
+        .flex()
+        .flex_none()
+        .child(main)
+        .child(div().w(px(1.)).bg(seam))
+        .child(chevron)
+}
+
+pub struct MenuItem {
+    pub label: SharedString,
+    /// Key hint shown at the right edge, like "Space" or "⌘⌫".
+    pub shortcut: Option<SharedString>,
+    pub enabled: bool,
+    pub action: Option<Box<dyn Fn(&mut Window, &mut App)>>,
+}
+
+impl MenuItem {
+    pub fn new(label: impl Into<SharedString>, action: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        Self { label: label.into(), shortcut: None, enabled: true, action: Some(Box::new(action)) }
+    }
+
+    pub fn shortcut(mut self, keys: impl Into<SharedString>) -> Self {
+        self.shortcut = Some(keys.into());
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.enabled = !disabled;
+        self
+    }
+
+    pub fn separator() -> Self {
+        Self { label: SharedString::default(), shortcut: None, enabled: false, action: None }
+    }
+}
+
+/// A native-feeling popup menu, positioned below the element it is placed in.
+/// `on_dismiss` runs for a click anywhere outside it.
+pub fn popup_menu(
+    id: &str,
+    items: Vec<MenuItem>,
+    window: &Window,
+    on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    menu(id, items, None, window, on_dismiss)
+}
+
+/// A right-click menu opening at `position`, in window coordinates.
+pub fn context_menu(
+    id: &str,
+    items: Vec<MenuItem>,
+    position: gpui::Point<gpui::Pixels>,
+    window: &Window,
+    on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    menu(id, items, Some(position), window, on_dismiss)
+}
+
+fn menu(
+    id: &str,
+    items: Vec<MenuItem>,
+    position: Option<gpui::Point<gpui::Pixels>>,
+    window: &Window,
+    on_dismiss: impl Fn(&mut Window, &mut App) + 'static,
+) -> AnyElement {
+    let on_dismiss = std::rc::Rc::new(on_dismiss);
+    let dismiss = on_dismiss.clone();
+    let viewport = window.viewport_size();
+    let rows = items.into_iter().enumerate().map(|(ix, item)| {
+        if item.action.is_none() {
+            return div().mx_2().my_1().h(px(1.)).bg(theme::border()).into_any_element();
+        }
+        let key = SharedString::from(format!("{id}-item-{ix}"));
+        let action = item.action.unwrap();
+        let dismiss = on_dismiss.clone();
+        div()
+            .id(key.clone())
+            .flex()
+            .items_center()
+            .h(px(26.))
+            .px_2p5()
+            .mx_1()
+            .rounded(px(6.))
+            .text_sm()
+            .whitespace_nowrap()
+            .gap_6()
+            .group(key.clone())
+            .when(!item.enabled, |s| s.text_color(theme::text_faint()))
+            .when(item.enabled, |s| {
+                s.text_color(theme::text())
+                    .cursor_pointer()
+                    .hover(|s| s.bg(theme::accent()).text_color(rgb(0x1f0b00)))
+                    .on_click(move |_, window, cx| {
+                        cx.stop_propagation();
+                        dismiss(window, cx);
+                        action(window, cx);
+                    })
+            })
+            .child(div().flex_1().child(item.label))
+            .when_some(item.shortcut, |s, keys| {
+                s.child(
+                    div()
+                        .text_color(theme::text_faint())
+                        .group_hover(key.clone(), |s| s.text_color(rgba(0x1f0b00b3)))
+                        .child(keys),
+                )
+            })
+            .into_any_element()
+    });
+    let anchored = match position {
+        Some(at) => gpui::anchored().position(at).anchor(gpui::Corner::TopLeft),
+        None => gpui::anchored().anchor(gpui::Corner::TopRight),
+    };
+    div()
+        .when(position.is_none(), |s| s.absolute().top_full().right_0())
+        .child(
+            // A transparent backdrop catches the click that dismisses the menu, so it
+            // never also lands on whatever is underneath.
+            gpui::deferred(
+                gpui::anchored().position(gpui::point(px(0.), px(0.))).child(
+                    div()
+                        .id(SharedString::from(format!("{id}-backdrop")))
+                        .w(viewport.width)
+                        .h(viewport.height)
+                        .occlude()
+                        .on_mouse_down(gpui::MouseButton::Left, {
+                            let dismiss = dismiss.clone();
+                            move |_, window, cx| dismiss(window, cx)
+                        })
+                        .on_mouse_down(gpui::MouseButton::Right, {
+                            move |_, window, cx| {
+                                cx.stop_propagation();
+                                dismiss(window, cx)
+                            }
+                        }),
+                ),
+            )
+            .with_priority(1),
+        )
+        .child(
+            gpui::deferred(
+                anchored
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("{id}-menu")))
+                            .mt_1p5()
+                            .flex()
+                            .flex_col()
+                            .min_w(px(210.))
+                            .py_1()
+                            .rounded(px(10.))
+                            .bg(rgb(0x262220))
+                            .border_1()
+                            .border_color(rgba(0xffffff1f))
+                            .shadow(vec![
+                                shadow(gpui::black().opacity(0.45), 10.0, 28.0, -6.0),
+                                shadow(gpui::black().opacity(0.3), 1.0, 3.0, 0.0),
+                            ])
+                            .occlude()
+                            .children(rows)
+                            .with_animation(
+                                SharedString::from(format!("{id}-menu-in")),
+                                Animation::new(Duration::from_millis(140)).with_easing(ease_out_quint()),
+                                |el, t| el.opacity(t).mt(px(6. - 2. * t)),
+                            ),
+                    ),
+            )
+            .with_priority(2),
+        )
+        .into_any_element()
 }

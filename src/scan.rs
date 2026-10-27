@@ -82,6 +82,11 @@ impl Tree {
         }
     }
 
+    /// Whether a node is still reachable from the root (it isn't once removed).
+    pub fn is_attached(&self, id: NodeId) -> bool {
+        self.lineage(id).windows(2).all(|w| self.node(w[0]).children.contains(&w[1]))
+    }
+
     /// Detaches a node after its files were deleted, shrinking every ancestor.
     pub fn remove(&mut self, id: NodeId) {
         let Some(parent) = self.node(id).parent else {
@@ -350,6 +355,206 @@ fn flatten(entry: Entry, parent: Option<NodeId>, nodes: &mut Vec<Node>) -> NodeI
     id
 }
 
+/// Files an admin scan uses to talk to the app: the finished tree, live progress
+/// counters, and a marker the app creates to ask the helper to stop.
+#[derive(Clone)]
+pub struct HelperFiles {
+    pub tree: PathBuf,
+    progress: PathBuf,
+    cancel: PathBuf,
+}
+
+impl HelperFiles {
+    pub fn new() -> Self {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        Self::at(std::env::temp_dir().join(format!("burrdisk-{}-{stamp}", std::process::id())))
+    }
+
+    fn at(base: PathBuf) -> Self {
+        let with = |ext: &str| base.with_extension(ext);
+        Self { tree: with("tree"), progress: with("progress"), cancel: with("cancel") }
+    }
+
+    pub fn cancel(&self) {
+        let _ = fs::write(&self.cancel, b"");
+    }
+
+    pub fn read_progress(&self, progress: &Progress) {
+        let Ok(text) = fs::read_to_string(&self.progress) else { return };
+        let mut lines = text.lines();
+        let mut number = || lines.next().and_then(|l| l.parse::<u64>().ok());
+        if let (Some(files), Some(bytes)) = (number(), number()) {
+            progress.files.store(files, Ordering::Relaxed);
+            progress.bytes.store(bytes, Ordering::Relaxed);
+        }
+        if let Some(current) = text.lines().nth(2)
+            && let Ok(mut slot) = progress.current.try_lock()
+        {
+            *slot = current.to_string();
+        }
+    }
+
+    fn remove(&self) {
+        for path in [&self.tree, &self.progress, &self.cancel] {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
+/// Scans `root` as root. macOS asks for an administrator's password or Touch ID, then
+/// runs this same executable in helper mode; `None` if that was refused or cancelled.
+#[cfg(target_os = "macos")]
+pub fn scan_as_admin(root: &Path, display_name: &str, files: &HelperFiles) -> Option<Tree> {
+    let exe = std::env::current_exe().ok()?;
+    let base = files.tree.with_extension("");
+    let status = std::process::Command::new("/usr/bin/osascript")
+        .args([
+            "-e",
+            "on run argv",
+            "-e",
+            "do shell script (quoted form of item 1 of argv) & \" --scan-helper \" & (quoted form of item 2 of argv) & \" \" & (quoted form of item 3 of argv) & \" \" & (quoted form of item 4 of argv) with prompt \"Burrdisk wants to scan folders only an administrator can read.\" with administrator privileges",
+            "-e",
+            "end run",
+        ])
+        .arg(&exe)
+        .arg(&base)
+        .arg(root)
+        .arg(display_name)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .ok()?;
+    let tree = status
+        .success()
+        .then(|| fs::File::open(&files.tree).ok())
+        .flatten()
+        .and_then(|file| Tree::read(std::io::BufReader::new(file), root.to_path_buf()).ok());
+    files.remove();
+    tree
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn scan_as_admin(root: &Path, display_name: &str, _files: &HelperFiles) -> Option<Tree> {
+    scan(root, display_name, &Progress::default())
+}
+
+/// Entry point for `burrdisk --scan-helper <base> <root> <name>`, running as root.
+pub fn run_helper(args: &[std::ffi::OsString]) -> std::process::ExitCode {
+    use std::process::ExitCode;
+    let [base, root, name] = args else { return ExitCode::FAILURE };
+    let files = HelperFiles::at(PathBuf::from(base));
+    let progress = Progress::default();
+    let done = AtomicBool::new(false);
+    let tree = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !done.load(Ordering::Relaxed) {
+                if files.cancel.exists() {
+                    progress.cancel();
+                }
+                let current = progress.current.lock().map(|c| c.clone()).unwrap_or_default();
+                let text = format!(
+                    "{}\n{}\n{current}\n",
+                    progress.files.load(Ordering::Relaxed),
+                    progress.bytes.load(Ordering::Relaxed)
+                );
+                // Write then rename, so the app never reads half a file.
+                let partial = files.progress.with_extension("progress-new");
+                if fs::write(&partial, text).is_ok() {
+                    let _ = fs::rename(&partial, &files.progress);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        });
+        let tree = scan(Path::new(root), &name.to_string_lossy(), &progress);
+        done.store(true, Ordering::Relaxed);
+        tree
+    });
+    let Some(tree) = tree else { return ExitCode::FAILURE };
+    let written = fs::File::create(&files.tree).and_then(|file| {
+        let mut out = std::io::BufWriter::new(file);
+        tree.write(&mut out)?;
+        std::io::Write::flush(&mut out)
+    });
+    if written.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
+const TREE_MAGIC: &[u8; 4] = b"BDT1";
+
+impl Tree {
+    /// Serializes the tree for handing it from the admin helper to the app.
+    pub fn write(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
+        out.write_all(TREE_MAGIC)?;
+        out.write_all(&(self.nodes.len() as u32).to_le_bytes())?;
+        for node in &self.nodes {
+            let kind = match node.kind {
+                NodeKind::Dir => 0u8,
+                NodeKind::File => 1,
+                NodeKind::Hidden => 2,
+            };
+            out.write_all(&[kind])?;
+            out.write_all(&node.size.to_le_bytes())?;
+            out.write_all(&node.items.to_le_bytes())?;
+            out.write_all(&node.parent.unwrap_or(u32::MAX).to_le_bytes())?;
+            out.write_all(&(node.name.len() as u32).to_le_bytes())?;
+            out.write_all(node.name.as_bytes())?;
+        }
+        Ok(())
+    }
+
+    /// Reads a tree written by [`Tree::write`]. Children are listed in id order,
+    /// which is the largest-first order they were written in.
+    pub fn read(mut input: impl std::io::Read, root_path: PathBuf) -> std::io::Result<Tree> {
+        use std::io::{Error, ErrorKind};
+        let mut u32_buf = [0u8; 4];
+        let mut u64_buf = [0u8; 8];
+        let mut magic = [0u8; 4];
+        input.read_exact(&mut magic)?;
+        if &magic != TREE_MAGIC {
+            return Err(Error::new(ErrorKind::InvalidData, "not a Burrdisk tree"));
+        }
+        input.read_exact(&mut u32_buf)?;
+        let count = u32::from_le_bytes(u32_buf) as usize;
+        let mut nodes: Vec<Node> = Vec::with_capacity(count);
+        for id in 0..count {
+            let mut kind = [0u8; 1];
+            input.read_exact(&mut kind)?;
+            input.read_exact(&mut u64_buf)?;
+            let size = u64::from_le_bytes(u64_buf);
+            input.read_exact(&mut u64_buf)?;
+            let items = u64::from_le_bytes(u64_buf);
+            input.read_exact(&mut u32_buf)?;
+            let parent = Some(u32::from_le_bytes(u32_buf)).filter(|p| *p != u32::MAX);
+            input.read_exact(&mut u32_buf)?;
+            let mut name = vec![0u8; u32::from_le_bytes(u32_buf) as usize];
+            input.read_exact(&mut name)?;
+            if parent.is_some_and(|p| p as usize >= id) {
+                return Err(Error::new(ErrorKind::InvalidData, "parent after child"));
+            }
+            if let Some(p) = parent {
+                nodes[p as usize].children.push(id as NodeId);
+            }
+            nodes.push(Node {
+                name: String::from_utf8_lossy(&name).into(),
+                size,
+                items,
+                kind: match kind[0] {
+                    0 => NodeKind::Dir,
+                    1 => NodeKind::File,
+                    _ => NodeKind::Hidden,
+                },
+                parent,
+                children: Vec::new(),
+            });
+        }
+        if nodes.is_empty() {
+            return Err(Error::new(ErrorKind::InvalidData, "empty tree"));
+        }
+        Ok(Tree { nodes, root_path })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,6 +583,13 @@ mod tests {
         tree.remove(b);
         assert_eq!(tree.node(Tree::ROOT).size, before - b_size);
         assert!(tree.is_ancestor(Tree::ROOT, a));
+
+        let mut bytes = Vec::new();
+        tree.write(&mut bytes).unwrap();
+        let read = Tree::read(&bytes[..], dir.clone()).unwrap();
+        assert_eq!(read.node(Tree::ROOT).size, tree.node(Tree::ROOT).size);
+        assert_eq!(read.node(Tree::ROOT).children, tree.node(Tree::ROOT).children);
+        assert_eq!(read.path(a), dir.join("a"));
 
         fs::remove_dir_all(&dir).unwrap();
     }

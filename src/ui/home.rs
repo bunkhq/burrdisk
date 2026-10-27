@@ -1,55 +1,127 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, BoxShadow, Context, ElementId, FontWeight, Hsla,
-    IntoElement, SharedString, Window, canvas, div, linear_color_stop, linear_gradient, point,
-    prelude::*, px, relative,
+    Animation, AnimationExt, AnyElement, Context, ElementId, FontWeight, Hsla, IntoElement,
+    SharedString, Window, canvas, div, prelude::*, px,
 };
 
-use crate::app::Burrdisk;
+use crate::app::{Burrdisk, Lobe};
 use crate::format;
-use crate::sunburst;
+use crate::sunburst::{self, Spine};
 use crate::theme;
-use crate::ui::components::{ButtonStyle, Icon, amount, bar, glow, icon, icon_label_button, section_label};
+use crate::ui::components::{ButtonStyle, Icon, MenuItem, icon, icon_button, icon_label_button, popup_menu, split_button};
 use crate::ui::fx;
-use crate::volumes::{Volume, VolumeKind};
+use crate::volumes::{self, Volume, VolumeKind};
 
 const COLLAPSED_IMAGES: usize = 6;
-const GAUGE_FILL: Duration = Duration::from_millis(1100);
+const GROW: Duration = Duration::from_millis(1300);
 const IMAGES_TOGGLE: Duration = Duration::from_millis(380);
-const IMAGE_ROW: f32 = 46.0;
-const IMAGE_GAP: f32 = 8.0;
+const IMAGE_ROW: f32 = 40.0;
+const IMAGE_GAP: f32 = 4.0;
 
 /// Fades and lifts a section into place, `order` beats after the page appears.
 fn rise(el: impl IntoElement, id: impl Into<ElementId>, order: usize) -> AnyElement {
-    let delay = order as f32 * 0.07;
-    let total = delay + 0.45;
+    let delay = order as f32 * 0.08;
+    let total = delay + 0.5;
     div()
         .relative()
         .child(el.into_any_element())
         .with_animation(id, Animation::new(Duration::from_secs_f32(total)), move |el, t| {
-            let local = sunburst::ease_out_cubic(((t * total - delay) / 0.45).clamp(0.0, 1.0));
-            el.opacity(local).top(px(14. * (1. - local)))
+            let local = sunburst::ease_out_cubic(((t * total - delay) / 0.5).clamp(0.0, 1.0));
+            el.opacity(local).top(px(10. * (1. - local)))
         })
         .into_any_element()
 }
 
-fn ago(at: Instant) -> String {
+fn ago(at: Instant, admin: bool) -> String {
+    let who = if admin { " as administrator" } else { "" };
     match at.elapsed().as_secs() {
-        s if s < 60 => "Scanned just now".into(),
-        s if s < 3600 => format!("Scanned {} min ago", s / 60),
-        s => format!("Scanned {} h ago", s / 3600),
+        s if s < 60 => format!("Scanned{who} just now"),
+        s if s < 3600 => format!("Scanned{who} {} min ago", s / 60),
+        s => format!("Scanned{who} {} h ago", s / 3600),
     }
 }
 
+/// What the home screen knows about a disk beyond its volume figures.
+#[derive(Clone)]
+struct Known {
+    scanned: Option<Instant>,
+    admin: bool,
+    lobes: Vec<Lobe>,
+}
+
+fn known(app: &Burrdisk, volume: &Volume) -> Known {
+    let scan = app.scans.get(&volume.mount);
+    Known {
+        scanned: scan.map(|s| s.scanned_at),
+        admin: scan.is_some_and(|s| s.target.admin),
+        lobes: scan.map(|s| s.lobes.clone()).unwrap_or_default(),
+    }
+}
+
+/// The spines of a disk's burr. A scanned disk grows one cluster of spines per
+/// top-level folder, in its chart color, so the burr previews what's inside. An
+/// unscanned one shows how full it is: lit spines for used space, stubs for free.
+fn spines(volume: &Volume, known: &Known, count: usize) -> Vec<Spine> {
+    if !known.lobes.is_empty() {
+        let widest = known.lobes.iter().map(|l| l.end - l.start).fold(0.0f32, f32::max).max(1e-3);
+        let mut out = Vec::new();
+        for lobe in &known.lobes {
+            let span = lobe.end - lobe.start;
+            let n = ((span * count as f32).round() as usize).max(1);
+            let reach = 0.5 + 0.5 * (span / widest).sqrt();
+            for j in 0..n {
+                let u = (j as f32 + 0.5) / n as f32;
+                // Each folder bulges in its middle, so neighbors read as separate lobes.
+                let profile = 0.72 + 0.28 * (u * std::f32::consts::PI).sin();
+                out.push(Spine { at: lobe.start + span * u, len: reach * profile, color: lobe.color });
+            }
+        }
+        return out;
+    }
+    let ratio = volume.fill_ratio();
+    let lit = theme::fullness(ratio);
+    let dim: Hsla = theme::border_strong().into();
+    (0..count)
+        .map(|i| {
+            let at = (i as f32 + 0.5) / count as f32;
+            if at < ratio {
+                Spine { at, len: 0.92 + 0.08 * ((i * 7 % 5) as f32 / 4.0), color: lit }
+            } else {
+                Spine { at, len: 0.34, color: dim }
+            }
+        })
+        .collect()
+}
+
+fn burr(
+    id: impl Into<ElementId>,
+    volume: &Volume,
+    known: &Known,
+    size: f32,
+    count: usize,
+    grow: f32,
+    bristle: f32,
+) -> impl IntoElement {
+    let spines = spines(volume, known, count);
+    let rim = known.scanned.map(|_| Hsla::from(theme::accent()));
+    let core = gpui::hsla(0.07, 0.14, 0.13, 1.0);
+    div().id(id).flex_none().size(px(size)).child(
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| sunburst::paint_burr(window, bounds, &spines, core, rim, grow, bristle),
+        )
+        .size_full(),
+    )
+}
+
 pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
-    let fill_t = (app.home_since.elapsed().as_secs_f32() / GAUGE_FILL.as_secs_f32()).min(1.0);
-    if fill_t < 1.0 {
+    let grow = (app.home_since.elapsed().as_secs_f32() / GROW.as_secs_f32()).min(1.0);
+    if grow < 1.0 {
         window.request_animation_frame();
     }
-    let fill_t = 1.0 - (1.0 - fill_t).powi(4);
-    // Display type follows the window a little, so the hero neither crowds nor floats.
-    let scale = (f32::from(window.viewport_size().width) / 1180.0).clamp(0.8, 1.15);
+    // Display type follows the window a little, so the lead disk neither crowds nor floats.
+    let scale = (f32::from(window.viewport_size().width) / 1180.0).clamp(0.82, 1.12);
 
     let startup = app.volumes.iter().find(|v| v.kind == VolumeKind::Startup).cloned();
     let drives: Vec<Volume> = app
@@ -65,91 +137,71 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         .cloned()
         .collect();
 
-    let mut body = div().flex().flex_col().gap(px(36.)).w_full().max_w(px(940.)).mx_auto();
-
-    body = body.child(rise(intro(app), "rise-intro", 0));
+    let mut body = div().flex().flex_col().gap(px(52.)).w_full().max_w(px(960.)).mx_auto();
 
     if let Some(volume) = startup {
-        let scanned = app.scanned_at(&volume.mount);
-        body = body.child(rise(hero(volume, scanned, fill_t, scale, cx), "rise-hero", 1));
+        let known = known(app, &volume);
+        body = body.child(rise(lead(app, volume, known, grow, scale, window, cx), "rise-lead", 0));
     } else if app.volumes_loaded {
         body = body.child(div().text_color(theme::text_muted()).child("No startup disk found."));
     }
 
     if !drives.is_empty() {
-        let cards: Vec<AnyElement> = drives
+        let items: Vec<AnyElement> = drives
             .into_iter()
             .enumerate()
             .map(|(ix, v)| {
-                let scanned = app.scanned_at(&v.mount);
-                drive_card(ix, v, scanned, cx)
+                let known = known(app, &v);
+                drive(app, ix, v, known, grow, window, cx)
             })
             .collect();
         body = body.child(rise(
             div()
                 .flex()
                 .flex_col()
-                .gap_3()
-                .child(section_label("Drives"))
-                .child(div().flex().flex_wrap().gap_3().children(cards)),
+                .gap_4()
+                .child(heading("Other drives", None))
+                .child(div().flex().flex_wrap().gap_x(px(28.)).gap_y_5().children(items)),
             "rise-drives",
-            2,
+            1,
         ));
     }
 
     if !images.is_empty() {
-        body = body.child(rise(image_section(app, images, window, cx), "rise-images", 3));
+        body = body.child(rise(image_section(app, images, window, cx), "rise-images", 2));
     }
 
     div()
         .flex()
         .flex_col()
         .size_full()
-        .child(titlebar(cx))
+        .child(titlebar(grow, cx))
         .child(
             div()
                 .id("home-scroll")
                 .flex_1()
                 .overflow_y_scroll()
-                .px(px(40.))
-                .pt(px(4.))
-                .pb(px(48.))
+                .px(px(44.))
+                .pt(px(12.))
+                .pb(px(56.))
                 .child(body),
         )
 }
 
-fn intro(app: &Burrdisk) -> impl IntoElement {
-    let disks = app.volumes.iter().filter(|v| v.kind != VolumeKind::DiskImage).count();
-    let free: u64 = app
-        .volumes
-        .iter()
-        .filter(|v| v.kind != VolumeKind::DiskImage)
-        .map(|v| v.available)
-        .sum();
-    let summary = if app.volumes_loaded {
-        format!(
-            "{disks} {} · {} available",
-            if disks == 1 { "disk" } else { "disks" },
-            format::bytes(free)
-        )
-    } else {
-        "Looking for disks…".into()
-    };
+fn heading(text: &'static str, count: Option<usize>) -> impl IntoElement {
     div()
         .flex()
-        .flex_col()
-        .gap_1()
-        .child(
-            div()
-                .text_size(px(28.))
-                .font_weight(FontWeight::BOLD)
-                .whitespace_nowrap()
-                .child("Where did the space go?"),
-        )
-        .child(div().text_sm().text_color(theme::text_muted()).whitespace_nowrap().child(summary))
+        .items_baseline()
+        .gap_2()
+        .child(div().text_base().font_weight(FontWeight::SEMIBOLD).child(text))
+        .when_some(count, |s, n| s.child(div().text_sm().text_color(theme::text_faint()).child(n.to_string())))
 }
 
-fn titlebar(cx: &mut Context<Burrdisk>) -> impl IntoElement {
+fn titlebar(grow: f32, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    // The wordmark's own little burr, all brand orange.
+    let mark: Vec<Spine> = (0..14)
+        .map(|i| Spine { at: i as f32 / 14.0, len: 0.95, color: theme::accent().into() })
+        .collect();
     div()
         .flex()
         .flex_none()
@@ -164,12 +216,15 @@ fn titlebar(cx: &mut Context<Burrdisk>) -> impl IntoElement {
                 .items_center()
                 .gap_2()
                 .child(
-                    div()
-                        .size(px(14.))
-                        .rounded_full()
-                        .border_3()
-                        .border_color(theme::accent())
-                        .shadow(glow(theme::accent(), 1.2)),
+                    div().size(px(20.)).child(
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                sunburst::paint_burr(window, bounds, &mark, theme::accent().into(), None, grow, 0.0)
+                            },
+                        )
+                        .size_full(),
+                    ),
                 )
                 .child(
                     div()
@@ -188,82 +243,127 @@ fn titlebar(cx: &mut Context<Burrdisk>) -> impl IntoElement {
         ))
 }
 
-fn hero(
+/// The disk actions menu, shared by every disk's chevron.
+fn disk_menu(app: &Burrdisk, volume: &Volume, known: &Known, window: &Window, cx: &mut Context<Burrdisk>) -> Option<AnyElement> {
+    if app.menu.as_ref() != Some(&volume.mount) {
+        return None;
+    }
+    let entity = cx.entity();
+    let act = |f: fn(&mut Burrdisk, Volume, &mut Context<Burrdisk>)| {
+        let entity = entity.clone();
+        let volume = volume.clone();
+        move |_: &mut Window, cx: &mut gpui::App| {
+            let volume = volume.clone();
+            entity.update(cx, |this, cx| f(this, volume, cx));
+        }
+    };
+    let mount = volume.mount.clone();
+    let info = volume.mount.clone();
+    let items = vec![
+        MenuItem::new("Rescan", act(|this, v, cx| {
+            let admin = this.scanned_as_admin(&v.mount);
+            this.rescan_volume(v, admin, cx)
+        })),
+        if known.admin {
+            MenuItem::new("Rescan as Normal User", act(|this, v, cx| this.rescan_volume(v, false, cx)))
+        } else {
+            MenuItem::new("Rescan as Administrator", act(|this, v, cx| this.rescan_volume(v, true, cx)))
+        },
+        MenuItem::separator(),
+        MenuItem::new("Forget Scan Result", act(|this, v, cx| this.forget_scan(&v.mount, cx)))
+            .disabled(known.scanned.is_none()),
+        MenuItem::separator(),
+        MenuItem::new("Show in Finder", move |_, cx| cx.open_with_system(&mount)),
+        MenuItem::new("Get Info", move |_, _| volumes::get_info(&info)),
+    ];
+    let dismiss = entity.clone();
+    Some(popup_menu(
+        &format!("disk-{}", volume.mount.display()),
+        items,
+        window,
+        move |_, cx| dismiss.update(cx, |this, cx| this.close_menu(cx)),
+    ))
+}
+
+/// Scan or Open, with the chevron for the rest of the disk's actions.
+fn scan_button(
+    app: &Burrdisk,
+    volume: &Volume,
+    known: &Known,
+    style: ButtonStyle,
+    window: &Window,
+    cx: &mut Context<Burrdisk>,
+) -> impl IntoElement {
+    let id = format!("scan-{}", volume.mount.display());
+    let open = volume.clone();
+    let mount = volume.mount.clone();
+    let (glyph, label) = if known.scanned.is_some() { (Icon::ArrowUpRight, "Open") } else { (Icon::Scan, "Scan") };
+    div()
+        .relative()
+        .flex_none()
+        .child(split_button(
+            &id,
+            glyph,
+            label,
+            style,
+            cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.scan_volume(open.clone(), cx)
+            }),
+            cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_menu(mount.clone(), cx)
+            }),
+        ))
+        .children(disk_menu(app, volume, known, window, cx))
+}
+
+/// The startup disk: a big burr beside its name, capacity and scan button.
+fn lead(
+    app: &Burrdisk,
     volume: Volume,
-    scanned: Option<Instant>,
-    fill_t: f32,
+    known: Known,
+    grow: f32,
     scale: f32,
+    window: &Window,
     cx: &mut Context<Burrdisk>,
 ) -> impl IntoElement {
     let ratio = volume.fill_ratio();
-    let shown_ratio = ratio * fill_t;
-    let fill = theme::fullness(ratio);
-    let accent: Hsla = theme::accent().into();
-    let t = fx::hover("hero");
-    let (used_num, used_unit) = format::bytes_parts(volume.total.saturating_sub(volume.available));
-    let percent = format!("{:.0}", shown_ratio * 100.0);
-    let details: SharedString = format!("{} · {}", volume.subtitle(), volume.file_system.to_uppercase()).into();
-    let scan_volume = volume.clone();
-    let card_volume = volume.clone();
-    let gauge = 168.0 * scale;
+    let bristle = fx::hover("lead-burr");
+    let used = volume.total.saturating_sub(volume.available);
+    let mut details = vec![format!("{} free", format::bytes(volume.available))];
+    if volume.purgeable() > 0 {
+        details.push(format!("{} purgeable", format::bytes(volume.purgeable())));
+    }
+    details.push(volume.file_system.to_uppercase());
+    let target = volume.clone();
+    let size = 300.0 * scale;
+    let percent = format!("{:.0}%", ratio * 100.0 * sunburst::ease_out_cubic(grow));
 
     div()
-        .id("hero")
-        .relative()
         .flex()
         .items_center()
-        .gap(px(36. * scale))
-        .p(px(30. * scale))
-        .rounded(px(22.))
-        .bg(linear_gradient(
-            135.,
-            linear_color_stop(fx::mix(gpui::rgb(0x2a1f18), gpui::rgb(0x33241a), t), 0.),
-            linear_color_stop(theme::surface(), 0.6),
-        ))
-        .border_1()
-        .border_color(accent.opacity(0.16 + 0.22 * t))
-        .shadow(vec![
-            BoxShadow {
-                color: gpui::black().opacity(0.4),
-                offset: point(px(0.), px(12.)),
-                blur_radius: px(32.),
-                spread_radius: px(-8.),
-            },
-            BoxShadow {
-                color: accent.opacity(0.06 + 0.12 * t),
-                offset: point(px(0.), px(14.)),
-                blur_radius: px(48.),
-                spread_radius: px(-4.),
-            },
-        ])
-        .cursor_pointer()
-        .on_hover(fx::on_hover("hero"))
-        .on_click(cx.listener(move |this, _, _, cx| this.scan_volume(card_volume.clone(), cx)))
+        .gap(px(44. * scale))
         .child(
             div()
+                .id("lead-burr")
                 .relative()
                 .flex_none()
-                .size(px(gauge))
-                .child(
-                    canvas(
-                        |_, _, _| {},
-                        move |bounds, _, window, _| {
-                            sunburst::paint_gauge(window, bounds, shown_ratio, 16.0 * scale, fill, theme::track().into());
-                        },
-                    )
-                    .size_full(),
-                )
+                .cursor_pointer()
+                .on_hover(fx::on_hover("lead-burr"))
+                .on_click(cx.listener(move |this, _, _, cx| this.scan_volume(target.clone(), cx)))
+                .child(burr("lead-burr-art", &volume, &known, size, 84, grow, bristle))
                 .child(
                     div()
                         .absolute()
                         .inset_0()
                         .flex()
-                        .flex_col()
                         .items_center()
                         .justify_center()
-                        .gap_1()
-                        .child(amount(percent, "%", 36.0 * scale, 16.0 * scale))
-                        .child(div().text_xs().text_color(theme::text_muted()).child("full")),
+                        .text_size(px(26. * scale))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(theme::text())
+                        .child(percent),
                 ),
         )
         .child(
@@ -272,198 +372,114 @@ fn hero(
                 .flex_col()
                 .flex_1()
                 .min_w_0()
-                .gap(px(18. * scale))
+                .gap(px(6.))
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(icon(Icon::HardDrive, 18.0, theme::text_muted()))
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .text_size(px(24. * scale))
-                                        .font_weight(FontWeight::BOLD)
-                                        .whitespace_nowrap()
-                                        .truncate()
-                                        .child(volume.name.clone()),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .text_sm()
-                                .text_color(theme::text_muted())
-                                .whitespace_nowrap()
-                                .child(details)
-                                .when_some(scanned, |s, at| s.child(scanned_badge(at))),
-                        ),
+                        .text_size(px(34. * scale))
+                        .line_height(px(40. * scale))
+                        .font_weight(FontWeight::BOLD)
+                        .whitespace_nowrap()
+                        .truncate()
+                        .child(volume.name.clone()),
                 )
                 .child(
                     div()
                         .flex()
-                        .items_end()
-                        .gap_2()
+                        .items_baseline()
+                        .gap_1p5()
+                        .text_size(px(17. * scale))
                         .whitespace_nowrap()
-                        .child(amount(used_num, used_unit, 40.0 * scale, 18.0 * scale))
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(format::bytes(used)))
                         .child(
                             div()
-                                .mb(px(5. * scale))
-                                .text_sm()
                                 .text_color(theme::text_muted())
                                 .child(format!("used of {}", format::bytes(volume.total))),
                         ),
                 )
                 .child(
                     div()
+                        .text_sm()
+                        .text_color(theme::text_muted())
+                        .whitespace_nowrap()
+                        .truncate()
+                        .child(details.join("  ·  ")),
+                )
+                .child(
+                    div()
                         .flex()
-                        .gap(px(28.))
-                        .child(stat("Available", format::bytes(volume.available), fill))
-                        .when(volume.purgeable() > 0, |this| {
-                            this.child(stat("Purgeable", format::bytes(volume.purgeable()), theme::text_faint().into()))
+                        .items_center()
+                        .gap_4()
+                        .mt(px(18.))
+                        .child(scan_button(app, &volume, &known, ButtonStyle::Primary, window, cx))
+                        .when_some(known.scanned, |s, at| {
+                            s.child(div().text_xs().text_color(theme::accent_hi()).whitespace_nowrap().child(ago(at, known.admin)))
                         }),
                 ),
         )
-        .child(
-            div().flex_none().child(
-                icon_label_button(
-                    "scan-startup",
-                    if scanned.is_some() { Icon::ArrowUpRight } else { Icon::Scan },
-                    if scanned.is_some() { "Open" } else { "Scan" },
-                    ButtonStyle::Primary,
-                    cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.scan_volume(scan_volume.clone(), cx)
-                    }),
-                )
-                .h(px(44.))
-                .pl(px(18.))
-                .pr(px(22.))
-                .text_base()
-                .rounded(px(12.)),
-            ),
-        )
 }
 
-fn scanned_badge(at: Instant) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .gap_1()
-        .px_2()
-        .py(px(1.))
-        .rounded_full()
-        .bg(theme::accent_soft())
-        .text_xs()
-        .text_color(theme::accent_hi())
-        .child(div().size(px(5.)).rounded_full().bg(theme::accent()))
-        .child(ago(at))
-}
-
-fn stat(label: &'static str, value: String, dot: Hsla) -> impl IntoElement {
-    div()
-        .flex()
-        .flex_col()
-        .gap_0p5()
-        .whitespace_nowrap()
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_1p5()
-                .child(div().size(px(6.)).rounded_full().bg(dot))
-                .child(div().text_xs().text_color(theme::text_faint()).child(label)),
-        )
-        .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(value))
-}
-
-fn drive_card(ix: usize, volume: Volume, scanned: Option<Instant>, cx: &mut Context<Burrdisk>) -> AnyElement {
-    let ratio = volume.fill_ratio();
+fn drive(
+    app: &Burrdisk,
+    ix: usize,
+    volume: Volume,
+    known: Known,
+    grow: f32,
+    window: &Window,
+    cx: &mut Context<Burrdisk>,
+) -> AnyElement {
     let key = ("drive", ix);
-    let t = fx::hover(key);
-    let accent: Hsla = theme::accent().into();
+    let bristle = fx::hover(key);
     let glyph = match volume.kind {
         VolumeKind::Network => Icon::Network,
         VolumeKind::External => Icon::Usb,
         _ => Icon::HardDrive,
     };
-    let free = format!("{} free of {}", format::bytes(volume.available), format::bytes(volume.total));
     let target = volume.clone();
     div()
-        .id(key)
         .flex()
-        .flex_col()
+        .items_center()
         .gap_3()
-        .w(relative(0.325))
-        .min_w(px(220.))
-        .p_4()
-        .rounded(px(16.))
-        .bg(linear_gradient(
-            180.,
-            linear_color_stop(fx::mix(theme::surface_hover(), gpui::rgb(0x2b2622), t), 0.),
-            linear_color_stop(theme::surface(), 1.),
-        ))
-        .border_1()
-        .border_color(fx::mix(theme::border(), accent.opacity(0.35), t))
-        .when(t > 0.0, |s| s.shadow(glow(accent, 0.8 * t)))
-        .cursor_pointer()
-        .on_hover(fx::on_hover(key))
-        .on_click(cx.listener(move |this, _, _, cx| this.scan_volume(target.clone(), cx)))
+        .w(px(296.))
+        .child(
+            div()
+                .id(key)
+                .cursor_pointer()
+                .on_hover(fx::on_hover(key))
+                .on_click(cx.listener(move |this, _, _, cx| this.scan_volume(target.clone(), cx)))
+                .child(burr(("drive-burr", ix), &volume, &known, 104.0, 40, grow, bristle)),
+        )
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap_2p5()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap_0p5()
                 .child(
                     div()
                         .flex()
-                        .flex_none()
                         .items_center()
-                        .justify_center()
-                        .size(px(34.))
-                        .rounded(px(10.))
-                        .bg(fx::mix(theme::raised(), theme::accent_soft(), t))
-                        .child(icon(glyph, 16.0, fx::mix(theme::text_muted(), theme::accent_hi(), t))),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
+                        .gap_1p5()
+                        .child(icon(glyph, 13.0, theme::text_faint()))
                         .child(
                             div()
+                                .min_w_0()
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .whitespace_nowrap()
                                 .truncate()
                                 .child(volume.name.clone()),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(theme::text_faint())
-                                .whitespace_nowrap()
-                                .child(volume.subtitle()),
                         ),
                 )
-                .when_some(scanned, |s, _| s.child(div().size(px(7.)).rounded_full().bg(theme::accent()))),
-        )
-        .child(bar(("drive-bar", ix), ratio, theme::fullness(ratio), 5.0))
-        .child(
-            div()
-                .text_xs()
-                .text_color(theme::text_muted())
-                .whitespace_nowrap()
-                .truncate()
-                .child(free),
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::text_muted())
+                        .whitespace_nowrap()
+                        .truncate()
+                        .child(format!("{} free of {}", format::bytes(volume.available), format::bytes(volume.total))),
+                )
+                .child(div().mt_2().flex().child(scan_button(app, &volume, &known, ButtonStyle::Secondary, window, cx))),
         )
         .into_any_element()
 }
@@ -491,8 +507,8 @@ fn image_section(app: &Burrdisk, images: Vec<Volume>, window: &mut Window, cx: &
         .by_ref()
         .take(if collapsible { COLLAPSED_IMAGES } else { total })
         .map(|(ix, v)| {
-            let scanned = app.scanned_at(&v.mount).is_some();
-            image_row(ix, v, scanned, cx)
+            let known = known(app, &v);
+            image_row(app, ix, v, known, window, cx)
         })
         .collect();
     let rest: Vec<(usize, Volume)> = images.collect();
@@ -505,9 +521,10 @@ fn image_section(app: &Burrdisk, images: Vec<Volume>, window: &mut Window, cx: &
         .map(|(n, (ix, v))| {
             // Rows further down arrive a little later, like a drawer unrolling.
             let local = ((progress * (1.0 + rest_count as f32 * 0.03)) - n as f32 * 0.03).clamp(0.0, 1.0);
+            let known = known(app, &v);
             div()
                 .opacity(local)
-                .child(image_row(ix, v.clone(), app.scanned_at(&v.mount).is_some(), cx))
+                .child(image_row(app, ix, v, known, window, cx))
                 .into_any_element()
         })
         .collect();
@@ -524,22 +541,7 @@ fn image_section(app: &Burrdisk, images: Vec<Volume>, window: &mut Window, cx: &
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .items_center()
-                        .child(section_label("Disk images"))
-                        .child(
-                            div()
-                                .px_1p5()
-                                .rounded_full()
-                                .bg(theme::raised())
-                                .text_xs()
-                                .text_color(theme::text_muted())
-                                .child(total.to_string()),
-                        ),
-                )
+                .child(heading("Disk images", Some(total)))
                 .when(collapsible, |this| {
                     this.child(
                         div()
@@ -577,58 +579,52 @@ fn image_section(app: &Burrdisk, images: Vec<Volume>, window: &mut Window, cx: &
             div()
                 .flex()
                 .flex_col()
-                .child(div().grid().grid_cols(2).gap(px(IMAGE_GAP)).children(head))
+                .child(div().grid().grid_cols(2).gap_x(px(24.)).gap_y(px(IMAGE_GAP)).children(head))
                 .when(!rest.is_empty() && progress > 0.0, |s| {
                     s.child(
                         div()
                             .h(px((rest_height + IMAGE_GAP) * progress))
                             .pt(px(IMAGE_GAP))
                             .overflow_hidden()
-                            .child(div().grid().grid_cols(2).gap(px(IMAGE_GAP)).children(rest)),
+                            .child(div().grid().grid_cols(2).gap_x(px(24.)).gap_y(px(IMAGE_GAP)).children(rest)),
                     )
                 }),
         )
 }
 
-fn image_row(ix: usize, volume: Volume, scanned: bool, cx: &mut Context<Burrdisk>) -> AnyElement {
+/// Each disk image keeps a hue of its own. Hovering only raises its lightness and
+/// chroma, so the icon never sweeps through other hues on the way.
+fn image_color(ix: usize, t: f32) -> Hsla {
+    let hue = (52.0 + ix as f32 * 137.5).rem_euclid(360.0);
+    sunburst::oklch(0.58 + 0.16 * t, 0.035 + 0.11 * t, hue)
+}
+
+fn image_row(app: &Burrdisk, ix: usize, volume: Volume, known: Known, window: &Window, cx: &mut Context<Burrdisk>) -> AnyElement {
     let target = volume.clone();
+    let mount = volume.mount.clone();
     let key = ("image", ix);
     let t = fx::hover(key);
+    let menu_open = app.menu.as_ref() == Some(&volume.mount);
+    let menu = disk_menu(app, &volume, &known, window, cx);
+    let name: SharedString = volume.name.clone().into();
     div()
         .id(key)
         .flex()
         .items_center()
         .gap_3()
         .h(px(IMAGE_ROW))
-        .px_2()
-        .rounded(px(12.))
-        .border_1()
-        .border_color(fx::mix(gpui::transparent_black(), theme::border(), t))
+        .pl_2()
+        .pr_1()
+        .rounded(px(10.))
         .bg(fx::mix(gpui::transparent_black(), theme::surface(), t))
         .cursor_pointer()
         .on_hover(fx::on_hover(key))
         .on_click(cx.listener(move |this, _, _, cx| this.scan_volume(target.clone(), cx)))
-        .child(
-            div()
-                .flex()
-                .flex_none()
-                .items_center()
-                .justify_center()
-                .size(px(30.))
-                .rounded(px(9.))
-                .bg(fx::mix(theme::surface(), theme::accent_soft(), t))
-                .child(icon(Icon::Disc, 14.0, fx::mix(theme::text_faint(), theme::accent_hi(), t))),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .text_sm()
-                .whitespace_nowrap()
-                .truncate()
-                .child(volume.name.clone()),
-        )
-        .when(scanned, |s| s.child(div().flex_none().size(px(6.)).rounded_full().bg(theme::accent())))
+        .child(icon(Icon::Disc, 14.0, image_color(ix, t)))
+        .child(div().flex_1().min_w_0().text_sm().whitespace_nowrap().truncate().child(name))
+        .when(known.scanned.is_some(), |s| {
+            s.child(div().flex_none().size(px(6.)).rounded_full().bg(theme::accent()))
+        })
         .child(
             div()
                 .w(px(72.))
@@ -639,6 +635,23 @@ fn image_row(ix: usize, volume: Volume, scanned: bool, cx: &mut Context<Burrdisk
                 .text_color(theme::text_muted())
                 .child(format::bytes(volume.total)),
         )
-        .child(div().flex_none().opacity(t).child(icon(Icon::ChevronRight, 12.0, theme::text_muted())))
+        .child(
+            div()
+                .relative()
+                .flex_none()
+                .opacity(if menu_open { 1.0 } else { 0.35 + 0.65 * t })
+                .child(
+                    icon_button(
+                        SharedString::from(format!("image-menu-{ix}")),
+                        Icon::ChevronDown,
+                        cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_menu(mount.clone(), cx)
+                        }),
+                    )
+                    .size(px(26.)),
+                )
+                .children(menu),
+        )
         .into_any_element()
 }

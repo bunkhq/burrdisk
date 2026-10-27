@@ -2,16 +2,18 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, ElementId, FontWeight, Hsla, IntoElement,
-    MouseButton, MouseMoveEvent, Pixels, Point, Render, Window, canvas, div,
+    Bounds, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, Window, canvas, div,
     ease_out_quint, linear_color_stop, linear_gradient, prelude::*, px, relative,
 };
 
-use crate::app::{Burrdisk, ChartDrag, DragItem, Explorer, Hover, NOTICE_DURATION, Notice, Screen};
+use crate::app::{self, Burrdisk, ChartDrag, DragItem, Explorer, Hover, NOTICE_DURATION, Notice, Screen, TRASH_COUNTDOWN};
 use crate::format;
 use crate::scan::{NodeId, NodeKind, Tree};
 use crate::sunburst::{self, Geometry, Hit, PaintState, Segment, Target, View};
 use crate::theme;
-use crate::ui::components::{ButtonStyle, Icon, amount, button, glow, icon, icon_button, icon_label_button};
+use crate::ui::components::{
+    ButtonStyle, Icon, MenuItem, amount, button, context_menu, glow, icon, icon_button, icon_label_button,
+};
 use crate::ui::fx;
 
 /// Rows listed in the sidebar before the rest are summarized.
@@ -20,10 +22,16 @@ const SIDEBAR_WIDTH: f32 = 360.0;
 /// Rows that animate in when a folder opens; the rest appear immediately.
 const ANIMATED_ROWS: usize = 18;
 
+/// An item's chart color, drained toward gray once it sits in the Collector.
 fn row_color(explorer: &Explorer, id: NodeId) -> Hsla {
-    explorer
+    let color = explorer
         .segment_color(id)
-        .unwrap_or_else(|| gpui::hsla(0.07, 0.05, 0.40, 1.0))
+        .unwrap_or_else(|| gpui::hsla(0.07, 0.05, 0.40, 1.0));
+    if explorer.is_collected(id) { pending(color) } else { color }
+}
+
+fn pending(color: Hsla) -> Hsla {
+    Hsla { s: color.s * 0.12, l: color.l * 0.85, ..color }
 }
 
 fn format_percent(ratio: f32) -> String {
@@ -63,7 +71,61 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         )
         .child(tray(explorer, cx))
         .children(explorer.notice.clone().map(toast))
+        .children(item_menu(explorer, window, cx))
         .into_any_element()
+}
+
+/// Opens the right-click menu for `id` where the mouse went down.
+fn open_item_menu(this: &mut Burrdisk, id: NodeId, event: &MouseDownEvent, cx: &mut Context<Burrdisk>) {
+    let Some(explorer) = this.explorer() else { return };
+    if explorer.tree.node(id).kind == NodeKind::Hidden {
+        return;
+    }
+    explorer.context = Some((id, event.position));
+    cx.notify();
+}
+
+fn item_menu(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -> Option<AnyElement> {
+    let (id, position) = explorer.context?;
+    let node = explorer.tree.node(id);
+    let name = node.name.to_string();
+    let path = explorer.tree.path(id);
+    let entity = cx.entity();
+    let on_explorer = |f: fn(&mut Explorer, NodeId)| {
+        let entity = entity.clone();
+        move |_: &mut Window, cx: &mut gpui::App| {
+            entity.update(cx, |this, cx| {
+                if let Some(explorer) = this.explorer() {
+                    f(explorer, id);
+                    cx.notify();
+                }
+            })
+        }
+    };
+    let mut items = Vec::new();
+    if node.kind == NodeKind::Dir {
+        items.push(MenuItem::new(format!("Expand \u{201c}{name}\u{201d}"), on_explorer(Explorer::set_focus)));
+    } else {
+        let open = path.clone();
+        items.push(MenuItem::new("Open", move |_, cx| cx.open_with_system(&open)));
+    }
+    let (preview, reveal, terminal) = (path.clone(), path.clone(), path);
+    items.push(MenuItem::new("Preview", move |_, _| app::quick_look(&preview)).shortcut("Space"));
+    items.push(MenuItem::new("Show in Finder", move |_, cx| cx.reveal_path(&reveal)));
+    items.push(MenuItem::new("Open in Terminal", move |_, _| app::open_in_terminal(&terminal)));
+    items.push(
+        MenuItem::new(format!("Move \u{201c}{name}\u{201d} to Collector"), on_explorer(Explorer::collect))
+            .shortcut("\u{2318}\u{232b}")
+            .disabled(explorer.is_collected(id)),
+    );
+    Some(context_menu(&format!("item-{id}"), items, position, window, move |_, cx| {
+        entity.update(cx, |this, cx| {
+            if let Some(explorer) = this.explorer() {
+                explorer.context = None;
+                cx.notify();
+            }
+        })
+    }))
 }
 
 /// A pill floating above the tray with the result of the last Trash operation.
@@ -132,10 +194,20 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
         .border_b_1()
         .border_color(theme::border())
         .child(icon_button(
-            "home",
+            "back",
             Icon::ChevronLeft,
-            cx.listener(|this, _, _, cx| this.go_home(cx)),
+            cx.listener(|this, _, _, cx| this.go_back(cx)),
         ))
+        .child({
+            let enabled = explorer.next_folder().is_some();
+            icon_button(
+                "forward",
+                Icon::ChevronRight,
+                cx.listener(|this, _, _, cx| this.go_forward(cx)),
+            )
+            .when(!enabled, |s| s.opacity(0.3).cursor_default())
+            .mr_1()
+        })
         .child(
             div()
                 .flex()
@@ -144,6 +216,26 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
                 .items_center()
                 .gap_0p5()
                 .overflow_hidden()
+                .child({
+                    // The root of every path: the disk list.
+                    let t = fx::hover("crumb-home");
+                    div()
+                        .id("crumb-home")
+                        .on_hover(fx::on_hover("crumb-home"))
+                        .flex_none()
+                        .px_2p5()
+                        .py_1()
+                        .rounded(px(7.))
+                        .border_1()
+                        .border_color(gpui::transparent_black())
+                        .text_sm()
+                        .whitespace_nowrap()
+                        .text_color(fx::mix(theme::text_muted(), theme::text(), t))
+                        .bg(fx::mix(gpui::transparent_black(), theme::raised(), t))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| this.go_home(cx)))
+                        .child("Disks and Folders")
+                })
                 .children(lineage.into_iter().enumerate().flat_map(|(ix, id)| {
                     let name = explorer.tree.node(id).name.to_string();
                     let is_last = ix == last;
@@ -181,8 +273,8 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
                         }))
                         .child(name)
                         .into_any_element();
-                    let separator = (ix > 0).then(|| icon(Icon::ChevronRight, 12.0, theme::text_faint()).into_any_element());
-                    separator.into_iter().chain(std::iter::once(crumb))
+                    let separator = icon(Icon::ChevronRight, 12.0, theme::text_faint()).into_any_element();
+                    [separator, crumb]
                 })),
         )
         .child(icon_button(
@@ -286,6 +378,14 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
             cx.listener(|this, _, _, _| {
                 if let Some(explorer) = this.explorer() {
                     explorer.pressing = false;
+                }
+            }),
+        )
+        .on_mouse_down(
+            MouseButton::Right,
+            cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                if let Some(id) = this.explorer().and_then(|e| e.hovered_node()) {
+                    open_item_menu(this, id, event, cx);
                 }
             }),
         )
@@ -423,7 +523,7 @@ fn hover_weights(explorer: &Explorer, segments: &[Segment]) -> (Vec<f32>, f32, f
 fn hint_for(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Dir => "Click to open",
-        NodeKind::File => "Drag to the tray to collect",
+        NodeKind::File => "Drag into the Collector below",
         NodeKind::Hidden => "Not visible to the scan",
     }
 }
@@ -458,6 +558,9 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
 
     let remaining = focus.children.len().saturating_sub(MAX_ROWS);
     let focus_path = explorer.tree.path(listed);
+    // While peeking, the header folder takes the color of its slice in the chart.
+    let header_color: Hsla = if previewing { row_color(explorer, listed) } else { theme::text_muted().into() };
+    let addable = listed != Tree::ROOT && !explorer.is_collected(listed);
     let items = focus.items;
     let (focus_num, focus_unit) = format::bytes_parts(focus.size);
 
@@ -465,7 +568,8 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
         let node = explorer.tree.node(id);
         let color = row_color(explorer, id);
         let ratio = node.size as f32 / focus_size as f32;
-        let is_hovered = hovered == Some(id);
+        // A row stays lit while its right-click menu is open.
+        let is_hovered = hovered == Some(id) || explorer.context.is_some_and(|(c, _)| c == id);
         let t = fx::track(("row", id as usize), is_hovered);
         let collected = explorer.is_collected(id);
         let kind = node.kind;
@@ -473,7 +577,6 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
         let size = format::bytes(node.size);
         let percent = format_percent(ratio);
         let drag = explorer.drag_item(id);
-        let path = (kind != NodeKind::Hidden).then(|| explorer.tree.path(id));
         let glyph = match kind {
             NodeKind::Dir => Icon::Folder,
             NodeKind::File => Icon::File,
@@ -519,6 +622,10 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                     cx.notify();
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| open_item_menu(this, id, event, cx)),
+            )
             .when_some(drag, |s, item| {
                 s.on_drag(item, |item: &DragItem, offset, _, cx| {
                     let item = Some(item.clone());
@@ -570,47 +677,6 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                                     .w(relative(ratio.clamp(0.015, 1.0))),
                             ),
                     )
-                    .child(
-                div()
-                    .absolute()
-                    .right_0()
-                    .top(px(-4.))
-                    .flex()
-                    .gap_0p5()
-                    .p_0p5()
-                    .rounded(px(9.))
-                    .bg(theme::surface())
-                    .border_1()
-                    .border_color(theme::border())
-                    .shadow_md()
-                    .opacity(t)
-                    .when(t < 0.05, |s| s.invisible())
-                    .when_some(path, |s, path| {
-                        s.child(
-                            icon_button(("reveal", id as usize), Icon::ArrowUpRight, move |_, _, cx| {
-                                cx.stop_propagation();
-                                cx.reveal_path(&path);
-                            })
-                            .size(px(26.)),
-                        )
-                        .when(!collected, |s| {
-                            s.child(
-                                icon_button(
-                                    ("collect", id as usize),
-                                    Icon::Plus,
-                                    cx.listener(move |this, _, _, cx| {
-                                        cx.stop_propagation();
-                                        if let Some(explorer) = this.explorer() {
-                                            explorer.collect(id);
-                                            cx.notify();
-                                        }
-                                    }),
-                                )
-                                .size(px(26.)),
-                            )
-                        })
-                    }),
-                    ),
             )
             .child(
                 div()
@@ -714,23 +780,10 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                 .pb_3()
                 .child(
                     div()
-                        .h(px(14.))
-                        .text_xs()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme::accent_hi())
-                        .when(previewing, |s| s.child("PEEKING INSIDE"))
-                        .when(!previewing, |s| s.text_color(theme::text_faint()).child("CURRENT FOLDER")),
-                )
-                .child(
-                    div()
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(icon(
-                            Icon::FolderOpen,
-                            16.0,
-                            if previewing { theme::accent_hi() } else { theme::text_muted() },
-                        ))
+                        .child(icon(Icon::FolderOpen, 16.0, header_color))
                         .child(
                             div()
                                 .flex_1()
@@ -741,6 +794,21 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                                 .truncate()
                                 .child(focus.name.to_string()),
                         )
+                        .when(addable, |s| {
+                            s.child(
+                                icon_button(
+                                    "collect-focus",
+                                    Icon::Plus,
+                                    cx.listener(move |this, _, _, cx| {
+                                        if let Some(explorer) = this.explorer() {
+                                            explorer.collect(listed);
+                                            cx.notify();
+                                        }
+                                    }),
+                                )
+                                .size(px(24.)),
+                            )
+                        })
                         .child(
                             icon_button("reveal-focus", Icon::ArrowUpRight, move |_, _, cx| {
                                 cx.reveal_path(&focus_path)
@@ -886,15 +954,19 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     });
 
     let (num, unit) = format::bytes_parts(total);
+    // 1 when the countdown starts, draining to 0 as the move begins.
+    let remaining = explorer
+        .countdown
+        .map(|at| 1.0 - (at.elapsed().as_secs_f32() / TRASH_COUNTDOWN.as_secs_f32()).min(1.0));
     let action: AnyElement = if explorer.trashing {
         button("trash", "Moving…", ButtonStyle::Secondary, |_, _, _| {}).into_any_element()
-    } else if explorer.confirm_armed {
+    } else if remaining.is_some() {
         icon_label_button(
-            "trash",
-            Icon::Trash,
-            format!("Move {} to Trash?", format::bytes(total)),
-            ButtonStyle::Danger,
-            cx.listener(|this, _, _, cx| this.move_collected_to_trash(cx)),
+            "stop-trash",
+            Icon::X,
+            "Stop",
+            ButtonStyle::Secondary,
+            cx.listener(|this, _, _, cx| this.stop_trash_countdown(cx)),
         )
         .into_any_element()
     } else {
@@ -903,13 +975,16 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
             Icon::Trash,
             "Move to Trash",
             ButtonStyle::Danger,
-            cx.listener(|this, _, _, cx| this.arm_confirm(cx)),
+            cx.listener(|this, _, _, cx| this.start_trash_countdown(cx)),
         )
         .into_any_element()
     };
+    let mut action = Some(action);
+    let seconds_left = remaining.map(|r| (r * TRASH_COUNTDOWN.as_secs_f32()).ceil().max(1.0) as u32);
 
     div()
         .id("tray")
+        .relative()
         .flex()
         .flex_none()
         .items_center()
@@ -952,7 +1027,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         .border_color(theme::border_strong())
                         .child(icon(Icon::Inbox, 18.0, theme::text_faint()))
                 })
-                .when(!empty, |s| {
+                .when(!empty && remaining.is_none(), |s| {
                     s.bg(linear_gradient(
                         180.,
                         linear_color_stop(theme::accent_hi(), 0.),
@@ -962,11 +1037,58 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                     .text_color(gpui::rgb(0x1f0b00))
                     .child(div().text_base().font_weight(FontWeight::BOLD).child(count.to_string()))
                 })
-                .with_animation(("badge-pop", count), Animation::new(Duration::from_millis(420)), move |el, t| {
-                    // The halo flares briefly each time the count changes.
-                    let flare = (t * std::f32::consts::PI).sin() * (1. - t);
-                    if empty { el } else { el.shadow(glow(theme::accent(), 1.4 + flare * 3.0)) }
-                }),
+                .when_some(remaining.zip(seconds_left), |s, (remaining, left)| {
+                    // The count gives way to the countdown: a ring draining around
+                    // the seconds left, each new number dropping into place.
+                    s.relative()
+                        .bg(linear_gradient(
+                            180.,
+                            linear_color_stop(gpui::rgb(0xf87171), 0.),
+                            linear_color_stop(gpui::rgb(0xb91c1c), 1.),
+                        ))
+                        .text_color(gpui::white())
+                        .child(
+                            canvas(
+                                |_, _, _| {},
+                                move |bounds, _, window, _| {
+                                    let ring = Bounds { origin: bounds.origin - gpui::point(px(5.), px(5.)), size: bounds.size + gpui::size(px(10.), px(10.)) };
+                                    sunburst::paint_arc(
+                                        window,
+                                        ring,
+                                        0.0,
+                                        remaining,
+                                        2.5,
+                                        gpui::white(),
+                                        gpui::white().opacity(0.22),
+                                        false,
+                                    )
+                                },
+                            )
+                            .absolute()
+                            .inset_0(),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(19.))
+                                .font_weight(FontWeight::BOLD)
+                                .child(left.to_string())
+                                .with_animation(
+                                    ElementId::Name(format!("countdown-{left}").into()),
+                                    Animation::new(Duration::from_millis(360)).with_easing(ease_out_quint()),
+                                    |el, t| el.opacity(t).mt(px(-14. * (1. - t))),
+                                ),
+                        )
+                })
+                .with_animation(
+                    ElementId::Name(format!("badge-pop-{count}-{seconds_left:?}").into()),
+                    Animation::new(Duration::from_millis(420)),
+                    move |el, t| {
+                        // The halo flares each time the count changes, and on every second of a countdown.
+                        let flare = (t * std::f32::consts::PI).sin() * (1. - t);
+                        let tone = if remaining.is_some() { theme::danger() } else { theme::accent() };
+                        if empty { el } else { el.shadow(glow(tone, 1.4 + flare * 3.0)) }
+                    },
+                ),
         )
         .when(empty, |s| {
             s.child(
@@ -993,7 +1115,35 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                     ),
             )
         })
-        .when(!empty, |s| {
+        .when(!empty && remaining.is_some(), |s| {
+            s.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .whitespace_nowrap()
+                            .child(format!("Moving {} to the Trash", format::bytes(total))),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_faint())
+                            .whitespace_nowrap()
+                            .truncate()
+                            .child(format!(
+                                "{count} {} · Press Stop or Esc to keep everything",
+                                if count == 1 { "item" } else { "items" }
+                            )),
+                    ),
+            )
+            .children(action.take())
+        })
+        .when(!empty && remaining.is_none(), |s| {
             s.child(amount(num, unit, 22.0, 13.0).flex_none())
             .child(
                 div()
@@ -1012,12 +1162,12 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                 cx.listener(|this, _, _, cx| {
                     if let Some(explorer) = this.explorer() {
                         explorer.collected.clear();
-                        explorer.confirm_armed = false;
+                        explorer.countdown = None;
                         cx.notify();
                     }
                 }),
             ))
-            .child(action)
+            .children(action.take())
         })
 }
 
