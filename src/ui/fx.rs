@@ -87,3 +87,74 @@ pub fn mix(a: impl Into<Hsla>, b: impl Into<Hsla>, t: f32) -> Hsla {
     let b = if b.a == 0.0 { Hsla { a: 0.0, ..a } } else { b };
     crate::sunburst::lerp_hsla(a, b, t)
 }
+
+/// A soft light under the cursor, clipped to a control's rounded shape, like a key
+/// backlit from wherever the pointer rests. Add it as the control's first child, pass
+/// the control's hover amount and corner radius, and repaint on mouse moves with
+/// [`on_move`]. Off the control, the light waits at the nearest edge while it fades.
+pub fn shine(t: f32, color: impl Into<Hsla>, radius: gpui::Pixels) -> impl gpui::IntoElement {
+    use gpui::{BoxShadow, Bounds, ContentMask, Corners, Styled, canvas, point, px, size};
+    let color = color.into();
+    canvas(
+        |_, _, _| {},
+        move |bounds, _, window, _| {
+            if t <= 0.001 {
+                return;
+            }
+            let mouse = window.mouse_position();
+            let at = point(
+                mouse.x.clamp(bounds.left(), bounds.right()),
+                mouse.y.clamp(bounds.top(), bounds.bottom()),
+            );
+            // A round light wider than a button is tall. GPUI's blur radius is the
+            // Gaussian's sigma, so this peaks near two thirds of `color`'s alpha under
+            // the cursor, half that 25px away, and a fifth at 40px.
+            let spot = crate::ui::px(52.);
+            let glow = [BoxShadow {
+                color: color.opacity(color.a * t),
+                offset: point(px(0.), px(0.)),
+                blur_radius: crate::ui::px(18.),
+                spread_radius: px(0.),
+            }];
+            // Content masks are square, so the rounded corners are traced in one-pixel
+            // rows; the rest of the control is a single band.
+            let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+            let r = f32::from(radius).min(w / 2.).min(h / 2.).max(0.);
+            let rows = r.ceil() as usize;
+            let mut bands = Vec::with_capacity(rows * 2 + 1);
+            for row in 0..rows {
+                let dy = r - (row as f32 + 0.5);
+                let inset = r - (r * r - dy * dy).max(0.).sqrt();
+                let top = row as f32;
+                bands.push((inset, top, 1.0_f32.min(r - top)));
+                bands.push((inset, h - top - 1.0_f32.min(r - top), 1.0_f32.min(r - top)));
+            }
+            bands.push((0., r, h - 2. * r));
+            for (inset, top, height) in bands {
+                if height <= 0. {
+                    continue;
+                }
+                let clip = Bounds {
+                    origin: bounds.origin + point(px(inset), px(top)),
+                    size: size(px(w - 2. * inset), px(height)),
+                };
+                window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                    window.paint_shadows(
+                        Bounds::centered_at(at, size(spot, spot)),
+                        Corners::all(spot / 2.),
+                        &glow,
+                    );
+                });
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+}
+
+/// A mouse-move handler that repaints, so a [`shine`] keeps up with the cursor.
+pub fn on_move(_: &gpui::MouseMoveEvent, window: &mut Window, _: &mut App) {
+    window.refresh();
+}

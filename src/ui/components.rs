@@ -123,8 +123,9 @@ pub fn glow(color: impl Into<Hsla>, strength: f32) -> Vec<BoxShadow> {
     ]
 }
 
-/// Filled buttons are lit from above: a vertical gradient, a brighter top edge
-/// and a halo in their own color that grows on hover.
+/// Filled buttons are lit from above: a vertical gradient and a halo in their own
+/// color that grows on hover. No button draws an outline; each one carries a soft
+/// light that follows the cursor across it instead.
 pub fn button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -149,8 +150,17 @@ fn styled_button(
         ButtonStyle::Secondary => theme::text().into(),
         ButtonStyle::Ghost => fx::mix(theme::text_muted(), theme::text(), t),
     };
+    // The light shows most on the dark stone and ghost fills; orange and red are
+    // already bright, so it only warms them.
+    let light = match style {
+        ButtonStyle::Primary => 0.20,
+        ButtonStyle::Danger => 0.18,
+        ButtonStyle::Secondary => 0.34,
+        ButtonStyle::Ghost => 0.34,
+    };
     let base = div()
         .id(id.clone())
+        .relative()
         .flex()
         .flex_none()
         .items_center()
@@ -159,13 +169,14 @@ fn styled_button(
         .h(px(32.))
         .px(px(14.))
         .rounded(px(9.))
-        .border_1()
         .text_sm()
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .whitespace_nowrap()
         .cursor_pointer()
         .on_hover(fx::on_hover(id))
+        .on_mouse_move(fx::on_move)
         .on_click(on_click)
+        .child(fx::shine(t, gpui::white().opacity(light), px(9.)))
         .when_some(glyph, |s, glyph| s.pl(px(11.)).child(icon(glyph, 14.0, fg)))
         .child(label);
     match style {
@@ -177,13 +188,11 @@ fn styled_button(
                 linear_color_stop(fx::mix(rgb(0x34302d), rgb(0x433d38), t), 0.),
                 linear_color_stop(fx::mix(rgb(0x2a2725), rgb(0x36312d), t), 1.),
             ))
-            .border_color(fx::mix(rgba(0xffffff1a), rgba(0xffffff33), t))
             .text_color(fg)
             .shadow(vec![shadow(gpui::black().opacity(0.3 + 0.1 * t), 1.0 + t, 2.0 + 4.0 * t, 0.0)])
             .active(|s| s.bg(rgb(0x262321))),
         ButtonStyle::Ghost => base
             .bg(fx::mix(gpui::transparent_black(), theme::surface_hover(), t))
-            .border_color(gpui::transparent_black())
             .text_color(fg)
             .active(|s| s.bg(theme::raised())),
     }
@@ -198,7 +207,6 @@ fn filled(base: Stateful<Div>, hi: Rgba, lo: Rgba, fg: Hsla, tone: Rgba, t: f32)
         linear_color_stop(lift(hi, 0.05 * t), 0.),
         linear_color_stop(lift(lo, 0.06 * t), 1.),
     ))
-    .border_color(lift(hi, 0.08 + 0.06 * t).opacity(0.7))
     .text_color(fg)
     .shadow(glow(tone, 1.0 + 1.2 * t))
     .active(move |s| {
@@ -231,15 +239,16 @@ pub fn icon_button(
         .flex_none()
         .items_center()
         .justify_center()
+        .relative()
         .size(px(28.))
         .rounded(px(8.))
-        .border_1()
-        .border_color(fx::mix(gpui::transparent_black(), theme::border(), t))
         .bg(fx::mix(gpui::transparent_black(), theme::raised(), t))
         .cursor_pointer()
         .active(|s| s.bg(theme::accent_soft()))
         .on_hover(fx::on_hover(id))
+        .on_mouse_move(fx::on_move)
         .on_click(on_click)
+        .child(fx::shine(t, gpui::white().opacity(0.34), px(8.)))
         .child(
             svg()
                 .path(glyph.path())
@@ -339,7 +348,6 @@ pub fn split_button(
         .px_0()
         .gap_0()
         .rounded_l(px(0.))
-        .border_l_0()
         .child(icon(Icon::ChevronDown, 13.0, if style == ButtonStyle::Primary { rgb(0x1f0b00) } else { theme::text_muted() }));
     // A hairline in the button's own ink separates the two halves.
     let seam: Hsla = if style == ButtonStyle::Primary { rgba(0x1f0b0040).into() } else { rgba(0xffffff1f).into() };
