@@ -2,14 +2,16 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, ElementId, FontWeight, Hsla, IntoElement,
-    SharedString, Window, canvas, div, prelude::*, px,
+    SharedString, Window, WindowControlArea, canvas, div, prelude::*,
 };
+use crate::ui::px;
 
 use crate::app::{Burrdisk, Lobe};
 use crate::format;
+use crate::platform;
 use crate::sunburst::{self, Spine};
 use crate::theme;
-use crate::ui::components::{ButtonStyle, Icon, MenuItem, icon, icon_button, icon_label_button, popup_menu, split_button};
+use crate::ui::components::{ButtonStyle, Icon, MenuItem, icon, icon_button, icon_label_button, popup_menu, split_button, window_controls};
 use crate::ui::fx;
 use crate::volumes::{self, Volume, VolumeKind};
 
@@ -121,7 +123,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         window.request_animation_frame();
     }
     // Display type follows the window a little, so the lead disk neither crowds nor floats.
-    let scale = (f32::from(window.viewport_size().width) / 1180.0).clamp(0.82, 1.12);
+    let scale = (f32::from(window.viewport_size().width) / (1180.0 * crate::ui::UI_SCALE)).clamp(0.82, 1.12);
 
     let startup = app.volumes.iter().find(|v| v.kind == VolumeKind::Startup).cloned();
     let drives: Vec<Volume> = app
@@ -175,7 +177,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         .flex()
         .flex_col()
         .size_full()
-        .child(titlebar(grow, cx))
+        .child(titlebar(grow, window, cx))
         .child(
             div()
                 .id("home-scroll")
@@ -197,7 +199,7 @@ fn heading(text: &'static str, count: Option<usize>) -> impl IntoElement {
         .when_some(count, |s, n| s.child(div().text_sm().text_color(theme::text_faint()).child(n.to_string())))
 }
 
-fn titlebar(grow: f32, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+fn titlebar(grow: f32, window: &Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     // The wordmark's own little burr, all brand orange.
     let mark: Vec<Spine> = (0..14)
         .map(|i| Spine { at: i as f32 / 14.0, len: 0.95, color: theme::accent().into() })
@@ -208,8 +210,12 @@ fn titlebar(grow: f32, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         .items_center()
         .justify_between()
         .h(px(56.))
-        .pl(px(96.))
-        .pr(px(20.))
+        .pl(px(platform::TITLEBAR_INSET + 20.))
+        .pr(px(if cfg!(windows) { platform::TITLEBAR_END } else { 20. }))
+        .window_control_area(WindowControlArea::Drag)
+        // Keeps the root's focus-on-click from claiming presses here, which would stop
+        // Windows from moving (or, on double-click, maximizing) the window.
+        .occlude()
         .child(
             div()
                 .flex()
@@ -234,13 +240,24 @@ fn titlebar(grow: f32, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         .child("Burrdisk"),
                 ),
         )
-        .child(icon_label_button(
-            "scan-folder",
-            Icon::FolderSearch,
-            "Scan Folder…",
-            ButtonStyle::Secondary,
-            cx.listener(|this, _, _, cx| this.pick_folder(cx)),
-        ))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .h_full()
+                .gap(px(12.))
+                .child(
+                    icon_label_button(
+                        "scan-folder",
+                        Icon::FolderSearch,
+                        "Scan Folder…",
+                        ButtonStyle::Secondary,
+                        cx.listener(|this, _, _, cx| this.pick_folder(cx)),
+                    )
+                    .occlude(),
+                )
+                .child(window_controls(window)),
+        )
 }
 
 /// The disk actions menu, shared by every disk's chevron.
@@ -273,8 +290,8 @@ fn disk_menu(app: &Burrdisk, volume: &Volume, known: &Known, window: &Window, cx
         MenuItem::new("Forget Scan Result", act(|this, v, cx| this.forget_scan(&v.mount, cx)))
             .disabled(known.scanned.is_none()),
         MenuItem::separator(),
-        MenuItem::new("Show in Finder", move |_, cx| cx.open_with_system(&mount)),
-        MenuItem::new("Get Info", move |_, _| volumes::get_info(&info)),
+        MenuItem::new(format!("Show in {}", platform::FILE_MANAGER), move |_, cx| cx.open_with_system(&mount)),
+        MenuItem::new(platform::GET_INFO, move |_, _| volumes::get_info(&info)),
     ];
     let dismiss = entity.clone();
     Some(popup_menu(

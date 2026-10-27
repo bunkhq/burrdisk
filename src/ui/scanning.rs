@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
-use gpui::{Context, FontWeight, IntoElement, Window, canvas, div, prelude::*, px};
+use gpui::{Context, FontWeight, IntoElement, Window, canvas, div, prelude::*};
+use crate::ui::px;
 
 use crate::app::{Burrdisk, Screen};
 use crate::format;

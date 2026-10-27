@@ -5,6 +5,14 @@ use gpui::{AssetSource, SharedString};
 
 pub struct Assets;
 
+/// Mona Sans (SIL Open Font License, see `assets/fonts/OFL.txt`), the app's one typeface.
+pub const FONTS: &[&[u8]] = &[
+    include_bytes!("../assets/fonts/MonaSans-Regular.ttf"),
+    include_bytes!("../assets/fonts/MonaSans-Medium.ttf"),
+    include_bytes!("../assets/fonts/MonaSans-SemiBold.ttf"),
+    include_bytes!("../assets/fonts/MonaSans-Bold.ttf"),
+];
+
 macro_rules! icons {
     ($($name:literal),* $(,)?) => {
         &[$((concat!("icons/", $name, ".svg"), include_bytes!(concat!("../assets/icons/", $name, ".svg")))),*]
@@ -30,6 +38,10 @@ const ICONS: &[(&str, &[u8])] = icons![
     "scan",
     "trash",
     "usb",
+    "window-close",
+    "window-maximize",
+    "window-minimize",
+    "window-restore",
     "x",
 ];
 

@@ -1,10 +1,10 @@
 #!/bin/sh
-# Builds a release Burrdisk.app and zips it for distribution.
+# Builds a release Burrdisk.app and packs it as a disk image and a zip.
 #
 # The app is signed ad hoc, not with a Developer ID, so on first launch macOS
 # asks to confirm opening it (right-click > Open, or System Settings > Privacy).
 #
-#   script/bundle.sh    writes target/release/Burrdisk.app and dist/Burrdisk-<version>-<arch>.zip
+#   script/bundle.sh    writes target/release/Burrdisk.app and dist/Burrdisk-<version>-<arch>.{dmg,zip}
 set -eu
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -18,18 +18,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp target/release/burrdisk "$APP/Contents/MacOS/burrdisk"
 
-# App icon, rendered from the SVG mark at every size iconutil wants.
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
-qlmanage -t -s 1024 -o "$TMP" assets/icon.svg >/dev/null 2>&1
-ICONSET="$TMP/Burrdisk.iconset"
-mkdir "$ICONSET"
-for size in 16 32 128 256 512; do
-    sips -z $size $size "$TMP/icon.svg.png" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-    double=$((size * 2))
-    sips -z $double $double "$TMP/icon.svg.png" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-done
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Burrdisk.icns"
+# App icon, built by script/icons/build.sh.
+cp assets/macos/Burrdisk.icns "$APP/Contents/Resources/Burrdisk.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -57,3 +47,13 @@ ZIP="dist/Burrdisk-$VERSION-$ARCH.zip"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "$ZIP"
+
+# The disk image opens to the app beside an Applications shortcut, to drag across.
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT
+cp -R "$APP" "$STAGE/"
+ln -s /Applications "$STAGE/Applications"
+DMG="dist/Burrdisk-$VERSION-$ARCH.dmg"
+rm -f "$DMG"
+hdiutil create -volname "Burrdisk" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
+echo "$DMG"

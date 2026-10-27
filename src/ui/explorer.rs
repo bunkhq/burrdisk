@@ -2,17 +2,20 @@ use std::time::Duration;
 
 use gpui::{
     Animation, AnimationExt, AnyElement, Context, ElementId, FontWeight, Hsla, IntoElement,
-    Bounds, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, Window, canvas, div,
-    ease_out_quint, linear_color_stop, linear_gradient, prelude::*, px, relative,
+    Bounds, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, Window, WindowControlArea, canvas, div,
+    ease_out_quint, linear_color_stop, linear_gradient, prelude::*, relative,
 };
+use crate::ui::px;
 
 use crate::app::{self, Burrdisk, ChartDrag, DragItem, Explorer, Hover, NOTICE_DURATION, Notice, Screen, TRASH_COUNTDOWN};
 use crate::format;
+use crate::platform;
 use crate::scan::{NodeId, NodeKind, Tree};
 use crate::sunburst::{self, Geometry, Hit, PaintState, Segment, Target, View};
 use crate::theme;
 use crate::ui::components::{
     ButtonStyle, Icon, MenuItem, amount, button, context_menu, glow, icon, icon_button, icon_label_button,
+    window_controls,
 };
 use crate::ui::fx;
 
@@ -60,7 +63,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         .flex()
         .flex_col()
         .size_full()
-        .child(titlebar(explorer, cx))
+        .child(titlebar(explorer, window, cx))
         .child(
             div()
                 .flex()
@@ -110,12 +113,14 @@ fn item_menu(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -
         items.push(MenuItem::new("Open", move |_, cx| cx.open_with_system(&open)));
     }
     let (preview, reveal, terminal) = (path.clone(), path.clone(), path);
-    items.push(MenuItem::new("Preview", move |_, _| app::quick_look(&preview)).shortcut("Space"));
-    items.push(MenuItem::new("Show in Finder", move |_, cx| cx.reveal_path(&reveal)));
+    if cfg!(not(windows)) {
+        items.push(MenuItem::new("Preview", move |_, _| app::quick_look(&preview)).shortcut("Space"));
+    }
+    items.push(MenuItem::new(format!("Show in {}", platform::FILE_MANAGER), move |_, cx| cx.reveal_path(&reveal)));
     items.push(MenuItem::new("Open in Terminal", move |_, _| app::open_in_terminal(&terminal)));
     items.push(
         MenuItem::new(format!("Move \u{201c}{name}\u{201d} to Collector"), on_explorer(Explorer::collect))
-            .shortcut("\u{2318}\u{232b}")
+            .shortcut(platform::COLLECT_KEYS)
             .disabled(explorer.is_collected(id)),
     );
     Some(context_menu(&format!("item-{id}"), items, position, window, move |_, cx| {
@@ -180,7 +185,7 @@ fn toast(notice: Notice) -> AnyElement {
         .into_any_element()
 }
 
-fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+fn titlebar(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let lineage = explorer.tree.lineage(explorer.focus);
     let last = lineage.len() - 1;
     div()
@@ -189,15 +194,22 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
         .items_center()
         .gap_1()
         .h(px(56.))
-        .pl(px(92.))
-        .pr(px(16.))
+        .pl(px(platform::TITLEBAR_INSET + 16.))
+        .pr(px(platform::TITLEBAR_END))
         .border_b_1()
         .border_color(theme::border())
-        .child(icon_button(
-            "back",
-            Icon::ChevronLeft,
-            cx.listener(|this, _, _, cx| this.go_back(cx)),
-        ))
+        .window_control_area(WindowControlArea::Drag)
+        // Keeps the root's focus-on-click from claiming presses here, which would stop
+        // Windows from moving (or, on double-click, maximizing) the window.
+        .occlude()
+        .child(
+            icon_button(
+                "back",
+                Icon::ChevronLeft,
+                cx.listener(|this, _, _, cx| this.go_back(cx)),
+            )
+            .occlude(),
+        )
         .child({
             let enabled = explorer.next_folder().is_some();
             icon_button(
@@ -207,6 +219,7 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
             )
             .when(!enabled, |s| s.opacity(0.3).cursor_default())
             .mr_1()
+            .occlude()
         })
         .child(
             div()
@@ -233,6 +246,7 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
                         .text_color(fx::mix(theme::text_muted(), theme::text(), t))
                         .bg(fx::mix(gpui::transparent_black(), theme::raised(), t))
                         .cursor_pointer()
+                        .occlude()
                         .on_click(cx.listener(|this, _, _, cx| this.go_home(cx)))
                         .child("Disks and Folders")
                 })
@@ -265,6 +279,7 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
                                 .bg(fx::mix(gpui::transparent_black(), theme::raised(), t))
                                 .cursor_pointer()
                         })
+                        .occlude()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(explorer) = this.explorer() {
                                 explorer.set_focus(id);
@@ -277,11 +292,15 @@ fn titlebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement
                     [separator, crumb]
                 })),
         )
-        .child(icon_button(
-            "rescan",
-            Icon::Refresh,
-            cx.listener(|this, _, _, cx| this.rescan(cx)),
-        ))
+        .child(
+            icon_button(
+                "rescan",
+                Icon::Refresh,
+                cx.listener(|this, _, _, cx| this.rescan(cx)),
+            )
+            .occlude(),
+        )
+        .when(cfg!(windows), |s| s.child(div().w(px(8.))).child(window_controls(window)))
 }
 
 fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
@@ -320,7 +339,8 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         }
     };
     // The label lives inside the center disc, so it scales with the chart.
-    let inner = explorer.chart_bounds.get().map_or(80.0, |b| Geometry::new(b).inner);
+    // Measured in window pixels, so it is brought back to design units for `px`.
+    let inner = explorer.chart_bounds.get().map_or(80.0, |b| Geometry::new(b).inner) / crate::ui::UI_SCALE;
     let center_width = inner * 1.55;
     let name_size = (inner * 0.13).clamp(11.0, 15.0);
     let value_size = (inner * 0.25).clamp(17.0, 34.0);
@@ -973,7 +993,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         icon_label_button(
             "trash",
             Icon::Trash,
-            "Move to Trash",
+            format!("Move to {}", platform::TRASH),
             ButtonStyle::Danger,
             cx.listener(|this, _, _, cx| this.start_trash_countdown(cx)),
         )
@@ -1111,7 +1131,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                             .text_color(theme::text_faint())
                             .whitespace_nowrap()
                             .truncate()
-                            .child("Collect what you want gone, then move it all to the Trash at once."),
+                            .child(format!("Collect what you want gone, then move it all to the {} at once.", platform::TRASH)),
                     ),
             )
         })
@@ -1127,7 +1147,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                             .text_sm()
                             .font_weight(FontWeight::MEDIUM)
                             .whitespace_nowrap()
-                            .child(format!("Moving {} to the Trash", format::bytes(total))),
+                            .child(format!("Moving {} to the {}", format::bytes(total), platform::TRASH)),
                     )
                     .child(
                         div()
