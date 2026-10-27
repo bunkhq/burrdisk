@@ -170,7 +170,7 @@ The direction contract asked for a warm "loam" ground. The shipped ground is a c
 **Key Characteristics:**
 - Graphite chrome, color only from data, brand orange, and Trash red.
 - The burr is the signature form: a filled seed core with tapered spines that end in a small bead, and that are always data-true.
-- Filled controls are lit from above: a vertical gradient, a brighter top edge, and a halo in their own color.
+- Filled controls are lit from above: a vertical gradient and a halo in their own color. Buttons never draw an outline; a soft light follows the cursor inside them.
 - Depth comes from colored halos plus a 1px contact shadow, never hard offsets.
 - One bundled typeface, Mona Sans, on every platform. Weight and size carry hierarchy, and figures are set big and bold with a smaller muted unit.
 
@@ -265,13 +265,14 @@ The recurring silhouette is round: burr cores, sunburst rings, and spines radiat
 
 ### Buttons
 Tactile and lit, like small backlit keys.
-- **Shape:** gently rounded (9px), 32px tall, 14px side padding (11px before a leading 14px icon), 1px border, 14px semibold label.
-- **Primary:** an Ember gradient (Ember Hi at the top to Ember Lo at the bottom) with Ember Ink text, a top-lit border (Ember Hi lifted, at 70%), and an Ember glow.
+- **Shape:** gently rounded (9px), 32px tall, 14px side padding (11px before a leading 14px icon), no border, 14px semibold label. No button, crumb or segment draws an outline; fill, gradient and glow carry the edge.
+- **Cursor light:** every button, icon button, crumb, inactive chart-mode segment and the Update button carries a round white light under the cursor (a 52px disc with an 18px Gaussian blur: it peaks near two thirds of its alpha under the cursor, half that 25px away, a fifth at 40px) and clipped to the control's rounded shape. It fades with the hover tween and, when the pointer leaves, waits at the nearest edge while it fades. It is meant to be seen on the dark controls, about 22% white at the cursor: 34% on Secondary, Ghost and every quiet control. On Primary (20%) and Danger (18%) it only warms the color. Drawn by `fx::shine`, repainted by `fx::on_move`. The pie chart never carries it.
+- **Primary:** an Ember gradient (Ember Hi at the top to Ember Lo at the bottom) with Ember Ink text and an Ember glow.
 - **Danger:** the same construction in the Trash Red gradient, with white text.
-- **Hover:** gradient stops lighten (+0.05 and +0.06 L), the border brightens, and the glow strength rises from 1.0 to 2.2. **Active:** the gradient flips (low at top) and the glow drops to 0.6.
-- **Secondary:** the Stone gradient with a white hairline border (10%, rising to 20% on hover) and a contact shadow. Used for Scan Folder…, buttons on drives that are not the lead, Stop, and Moving….
+- **Hover:** gradient stops lighten (+0.05 and +0.06 L) and the glow strength rises from 1.0 to 2.2. **Active:** the gradient flips (low at top) and the glow drops to 0.6.
+- **Secondary:** the Stone gradient with a contact shadow. Used for Scan Folder…, buttons on drives that are not the lead, Stop, and Moving….
 - **Ghost:** transparent; fades to Graphite Hover with text going from muted to full.
-- **Icon button:** a 28px square (resized to 22–26px in dense spots) with 8px corners and a 15px icon. On hover it fades in a Raised fill and hairline border. When pressed it shows Ember Soft.
+- **Icon button:** a 28px square (resized to 22–26px in dense spots) with 8px corners and a 15px icon. On hover it fades in a Raised fill. When pressed it shows Ember Soft.
 - **Split button:** a button plus a chevron segment, with square inner corners and a 1px seam in the button's own ink (Ember Ink at 25% on primary, white at 12% otherwise). It holds Scan/Open on the left, and the chevron opens the disk menu.
 
 ### Popup Menu
@@ -283,18 +284,18 @@ Tactile and lit, like small backlit keys.
 - 50px tall with 11px corners. An 18px icon with no tile, in the row's chart color lightened +0.10 L (+0.08 more on hover), sits beside the name (14px medium) and a 3px share bar in the data color over `track`.
 - The icon's shape says what the item is: folder, archive, video, program (apps and other packages), audio, image, document, or plain file; Hidden space gets the disc. The color always matches the item's slice in the chart.
 - **Compact rows:** items under 0.1% of the list collapse to 26px lines with 8px corners: a 13px icon, a 13px regular muted name, the figure in 12px faint, no bar or percent.
-- Hover tints the whole row with a horizontal gradient of its data color (16%→3%) and a 28% border. Collected rows dim to 40%.
+- Hover tints the whole row with a horizontal gradient of its data color (16%→3%), with no border. Collected rows dim to 40%.
 
 ### Chart Modes
-- A segmented switch in the explorer titlebar, left of Rescan: **Size**, **File Count**, **File Types**. A 2px-padded Graphite Ground well with a hairline border and 9px corners; segments are 24px tall with 7px corners and 13px labels. The active segment wears the current-crumb style (Ember Soft fill, Ember Hi semibold text, Ember 22% border); the others ease from muted to a Raised fill on hover.
+- A segmented switch in the explorer titlebar, left of Rescan: **Size**, **File Count**, **File Types**. A 2px-padded Graphite Surface well with 9px corners and no border; segments are 24px tall with 7px corners and 13px labels. The active segment wears the current-crumb style (Ember Soft fill, Ember Hi semibold text, no border); the others ease from muted to a Raised fill on hover.
 - **Size:** slices by bytes on disk. **File Count:** slices and rows by files inside (folders themselves don't count); figures read "1,234 files" and the header leads with the count. **File Types:** three thicker rings over everything inside the focus folder: category, extension, then the biggest real items of each (apps count as one item). The sidebar lists every extension with its type faintly after the name; hovering a type in the chart lists its extensions, hovering an extension lists its files. Types and extensions open like folders (chart slice, sidebar row, or crumb): the path continues past the folder ("Downloads › Video › .mp4"), the chart redraws with fewer, thicker rings (never fewer than two ring widths), and the center, Back, Esc and the mouse's back button step out one level. An opened extension lists up to 200 of its biggest items, which can be collected, dragged and right-clicked.
 
 ### Full Disk Access
 - Scanning the startup disk or a folder above the home folder without Full Disk Access first opens a step screen: the disk's unscanned burr (180px) beside a 26px bold heading, one muted paragraph, three numbered steps in 22px hairline circles, then Open System Settings (primary) and Scan Without Access (ghost). Once access is detected on window activation, the actions become a single Scan button and an Ember Hi shield line confirms it.
-- On home, a single line under the startup disk's buttons (shield icon, muted sentence, an Ember Hi "Turn On…" link) stays until access is granted. In the explorer, an Ember Soft panel with a 22% Ember border tops the disk's root list.
+- On home, a single line under the startup disk's buttons (shield icon, muted sentence, an Ember Hi "Turn On…" link) stays until access is granted. In the explorer, a borderless Ember Soft panel tops the disk's root list; hover deepens its wash to 22% Ember.
 
 ### Updates
-- **Update button:** in the home and explorer titlebars (left of Scan Folder… and of the chart modes), only while there is something to say. 28px tall, 9px corners, 13px semibold, ghost-like (muted, easing to Graphite Hover and text on hover; Raised with a hairline while its card is open). A 7px status dot leads: Ember with a soft Ember halo while an update is available or installing, faint grey after a failure. Labels: "Update to 0.3.0", "Downloading… 42%", "Installing…", "Update didn't finish"; after a check from the macOS app menu, a faint, unclickable "Checking for updates…" and then a check mark with "Burrdisk is up to date" for 4 seconds. It fades in over 420ms.
+- **Update button:** in the home and explorer titlebars (left of Scan Folder… and of the chart modes), only while there is something to say. 28px tall, 9px corners, 13px semibold, ghost-like (muted, easing to Graphite Hover and text on hover; Raised while its card is open). A 7px status dot leads: Ember with a soft Ember halo while an update is available or installing, faint grey after a failure. Labels: "Update to 0.3.0", "Downloading… 42%", "Installing…", "Update didn't finish"; after a check from the macOS app menu, a faint, unclickable "Checking for updates…" and then a check mark with "Burrdisk is up to date" for 4 seconds. It fades in over 420ms.
 - **Update card:** opens below the button, right-aligned, 328px wide: Menu Ground, 14px corners, white 12% hairline, a slightly deeper Float shadow (14px / 36px). It enters with a 220ms fade and an 8px settle. Inside, 16px padding and 14px gaps: a 30px Ember Soft well with the download icon in Ember Hi beside the 16px semibold "Burrdisk 0.3.0" and a faint "You have 0.2.0 · 4.7 MB download"; the release notes' first paragraph in 13px muted; a "What's New ↗" link styled like home's Turn On…; then faint-iconed 12px cautions that say what restarting costs (scans need to run again; on macOS, Full Disk Access must be turned on again, because the ad hoc signature changes); then Later (ghost) and Update and Restart (primary). Downloading swaps the buttons for a 6px Ember bar on `track` with its own soft glow, "Downloading 2.1 of 4.7 MB" and Cancel; installing fills the bar and says Burrdisk will reopen.
 - **When it opens by itself:** once per new version, and only on the disk list. Found while scanning or exploring, the button appears without the card. Clicking outside the card puts it away like Later.
 - **Errors** are neutral, never Trash Red: the reason as a muted sentence beside a faint X, with Try Again (primary) and Download Manually (ghost). A copy that can't replace itself (macOS App Translocation, a folder it can't write to, a Windows copy not installed by the installer) says why and offers Download, which opens the release page.
@@ -328,7 +329,7 @@ Tactile and lit, like small backlit keys.
 
 ### Do:
 - **Do** take every non-grey color from the data wheel, Fullness, Ember, or Trash Red (The Data Owns Color Rule).
-- **Do** build filled controls lit from above: a vertical hi→lo gradient, a brighter top border, a same-hue glow that grows on hover, and an inverted gradient when pressed.
+- **Do** build filled controls lit from above: a vertical hi→lo gradient, a same-hue glow that grows on hover, an inverted gradient when pressed, and the cursor light inside.
 - **Do** put Ember Ink (`#1f0b00`), not black or white, on anything orange.
 - **Do** ease hovers through `fx::hover` (130ms in / 260ms out) and enter new elements with a short fade-and-rise.
 - **Do** keep every burr spine data-true: fill state before a scan, top-level folders after.
@@ -339,5 +340,6 @@ Tactile and lit, like small backlit keys.
 - **Don't** replace a disk's burr with a ring gauge or a block of stat chips.
 - **Don't** use Trash Red for anything but moving to the Trash, its countdown, or its errors.
 - **Don't** cast neutral or hard-offset drop shadows under colored elements. Use the colored Glow.
+- **Don't** outline buttons. A hairline around a control is the generic look Burrdisk avoids; separate with fill and light.
 - **Don't** add a second typeface. Hierarchy comes from Mona Sans' weight and size.
 - **Don't** add spines, rings, or colors that do not map to bytes on disk. The wordmark burr is the only ornamental burr.
