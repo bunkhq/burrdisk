@@ -7,7 +7,10 @@ use gpui::{
 };
 use crate::ui::px;
 
-use crate::app::{self, Burrdisk, ChartDrag, DragItem, Explorer, Hover, NOTICE_DURATION, Notice, Screen, TRASH_COUNTDOWN};
+use crate::app::{
+    self, Burrdisk, ChartDrag, ChartMode, DragItem, Explorer, Hover, NOTICE_DURATION, Notice, Screen, TRASH_COUNTDOWN,
+};
+use crate::filetype::{self, Breakdown, Category};
 use crate::format;
 use crate::platform;
 use crate::scan::{NodeId, NodeKind, Tree};
@@ -18,6 +21,7 @@ use crate::ui::components::{
     window_controls,
 };
 use crate::ui::fx;
+use crate::volumes;
 
 /// Rows listed in the sidebar before the rest are summarized.
 const MAX_ROWS: usize = 200;
@@ -46,6 +50,8 @@ fn format_percent(ratio: f32) -> String {
 }
 
 pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    let full_disk_access = app.full_disk_access;
+    let update = crate::ui::update::button_and_card(app, window, cx);
     let Screen::Explorer(explorer) = &mut app.screen else {
         return div().into_any_element();
     };
@@ -63,14 +69,14 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         .flex()
         .flex_col()
         .size_full()
-        .child(titlebar(explorer, window, cx))
+        .child(titlebar(explorer, update, window, cx))
         .child(
             div()
                 .flex()
                 .flex_1()
                 .min_h_0()
                 .child(chart(explorer, cx))
-                .child(sidebar(explorer, cx)),
+                .child(sidebar(explorer, full_disk_access, cx)),
         )
         .child(tray(explorer, cx))
         .children(explorer.notice.clone().map(toast))
@@ -185,9 +191,25 @@ fn toast(notice: Notice) -> AnyElement {
         .into_any_element()
 }
 
-fn titlebar(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let lineage = explorer.tree.lineage(explorer.focus);
-    let last = lineage.len() - 1;
+    // An opened file type continues the path past the folder: "Video › .mp4".
+    let groups: Vec<(u32, String)> = match (explorer.breakdown.as_deref(), explorer.group_focus) {
+        (Some(breakdown), Some(g)) => {
+            let mut chain = vec![g];
+            while let Some(parent) = breakdown.group(*chain.last().unwrap()).parent.filter(|p| *p != Breakdown::ROOT) {
+                chain.push(parent);
+            }
+            chain.into_iter().rev().map(|g| (g, breakdown.group(g).name.clone())).collect()
+        }
+        _ => Vec::new(),
+    };
+    let crumbs: Vec<(Option<NodeId>, Option<u32>, String)> = lineage
+        .iter()
+        .map(|id| (Some(*id), None, explorer.tree.node(*id).name.to_string()))
+        .chain(groups.into_iter().map(|(g, name)| (None, Some(g), name)))
+        .collect();
+    let last = crumbs.len() - 1;
     div()
         .flex()
         .flex_none()
@@ -250,8 +272,7 @@ fn titlebar(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) ->
                         .on_click(cx.listener(|this, _, _, cx| this.go_home(cx)))
                         .child("Disks and Folders")
                 })
-                .children(lineage.into_iter().enumerate().flat_map(|(ix, id)| {
-                    let name = explorer.tree.node(id).name.to_string();
+                .children(crumbs.into_iter().enumerate().flat_map(|(ix, (id, group, name))| {
                     let is_last = ix == last;
                     let t = fx::hover(("crumb", ix));
                     let crumb = div()
@@ -282,7 +303,12 @@ fn titlebar(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) ->
                         .occlude()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(explorer) = this.explorer() {
-                                explorer.set_focus(id);
+                                match id {
+                                    // The open folder's own crumb closes any opened type.
+                                    Some(id) if id == explorer.focus => explorer.open_group(None),
+                                    Some(id) => explorer.set_focus(id),
+                                    None => explorer.open_group(group),
+                                }
                                 cx.notify();
                             }
                         }))
@@ -292,6 +318,8 @@ fn titlebar(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) ->
                     [separator, crumb]
                 })),
         )
+        .children(update.map(|u| div().mr(px(8.)).child(u)))
+        .child(mode_switch(explorer, cx))
         .child(
             icon_button(
                 "rescan",
@@ -303,8 +331,108 @@ fn titlebar(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) ->
         .when(cfg!(windows), |s| s.child(div().w(px(8.))).child(window_controls(window)))
 }
 
+/// Chart modes, as the switch in the titlebar names them.
+const MODES: [(ChartMode, &str); 3] = [
+    (ChartMode::Size, "Size"),
+    (ChartMode::Count, "File Count"),
+    (ChartMode::Types, "File Types"),
+];
+
+/// A segmented switch for what the chart's slices stand for.
+fn mode_switch(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(2.))
+        .p(px(2.))
+        .mr_2()
+        .rounded(px(9.))
+        .bg(theme::bg())
+        .border_1()
+        .border_color(theme::border())
+        .children(MODES.iter().enumerate().map(|(ix, &(mode, label))| {
+            let on = explorer.mode == mode;
+            let t = fx::hover(("mode", ix));
+            div()
+                .id(("mode", ix))
+                .on_hover(fx::on_hover(("mode", ix)))
+                .flex()
+                .items_center()
+                .h(px(24.))
+                .px_2p5()
+                .rounded(px(7.))
+                .border_1()
+                .text_size(px(13.))
+                .whitespace_nowrap()
+                .when(on, |s| {
+                    s.text_color(theme::accent_hi())
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .bg(theme::accent_soft())
+                        .border_color(Hsla::from(theme::accent()).opacity(0.22))
+                })
+                .when(!on, |s| {
+                    s.text_color(fx::mix(theme::text_muted(), theme::text(), t))
+                        .bg(fx::mix(gpui::transparent_black(), theme::raised(), t))
+                        .border_color(gpui::transparent_black())
+                        .cursor_pointer()
+                })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(explorer) = this.explorer() {
+                        explorer.set_mode(mode);
+                        cx.notify();
+                    }
+                }))
+                .child(label)
+        }))
+}
+
+fn files(n: u64) -> String {
+    if n == 1 { "1 file".into() } else { format!("{} files", format::count(n)) }
+}
+
+/// An item's figure in the current mode: how much space it takes, or how many files it holds.
+fn figure(explorer: &Explorer, id: NodeId) -> String {
+    let node = explorer.tree.node(id);
+    match explorer.mode {
+        ChartMode::Count => files(node.items),
+        _ => format::bytes(node.size),
+    }
+}
+
+/// The icon for an item, by what kind of file it is.
+fn item_icon(name: &str, kind: NodeKind) -> Icon {
+    category_icon(filetype::category(name, kind))
+}
+
+fn category_icon(category: Category) -> Icon {
+    match category {
+        Category::Folder => Icon::Folder,
+        Category::Archive => Icon::Archive,
+        Category::Video => Icon::Video,
+        Category::Program => Icon::AppWindow,
+        Category::Audio => Icon::Music,
+        Category::Image => Icon::Image,
+        Category::Document => Icon::FileText,
+        Category::Other => Icon::File,
+        Category::Hidden => Icon::Disc,
+    }
+}
+
+/// A breakdown group's own name: ".mp4 files" for an extension, "Video" for a category.
+fn group_name(breakdown: &Breakdown, g: u32) -> String {
+    let group = breakdown.group(g);
+    match group.parent {
+        Some(parent) if parent != Breakdown::ROOT => {
+            if group.name.starts_with('.') { format!("{} files", group.name) } else { "Files without an extension".into() }
+        }
+        _ => group.name.clone(),
+    }
+}
+
 fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let bounds_cell = explorer.chart_bounds.clone();
+    let rings = explorer.rings();
     let (segments, view) = match &explorer.zoom {
         Some(zoom) => (zoom.segments.clone(), zoom.view()),
         None => (explorer.segments.clone(), View::revealing(explorer.revealed)),
@@ -314,43 +442,70 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         .map(|s| match s.target {
             Target::Node(id) => explorer.is_collected(id),
             Target::Smaller(parent) => explorer.is_collected(parent),
+            Target::Group(_) | Target::GroupRest(_) => false,
         })
         .collect();
     let (highlight, dim, center_hover) = hover_weights(explorer, &segments);
 
     // What the center disc describes: the hovered item, or the folder in focus.
-    let (label_name, label_size, label_hint) = match explorer.hover {
-        Some(Hover::Target(Target::Node(id))) => {
+    let breakdown = explorer.breakdown.as_deref();
+    let (label_name, label_value, label_hint): (String, String, String) = match (explorer.hover, breakdown) {
+        (Some(Hover::Target(Target::Node(id))), _) => {
             let node = explorer.tree.node(id);
-            (node.name.to_string(), node.size, hint_for(node.kind))
+            let hint = if breakdown.is_some() { hint_for(NodeKind::File) } else { hint_for(node.kind) };
+            (node.name.to_string(), figure(explorer, id), hint.into())
         }
-        Some(Hover::Target(Target::Smaller(parent))) => {
-            let (count, size) = smaller_summary(explorer, parent);
-            (format!("{count} smaller items"), size, "")
+        (Some(Hover::Target(Target::Smaller(parent))), _) => {
+            let (count, value) = smaller_summary(explorer, parent);
+            (format!("{} smaller items", format::count(count as u64)), value, String::new())
         }
-        Some(Hover::Center) if explorer.focus != Tree::ROOT => {
-            let node = explorer.tree.node(explorer.focus);
+        (Some(Hover::Target(Target::Group(g))), Some(breakdown)) => {
+            let group = breakdown.group(g);
+            (group_name(breakdown, g), format::bytes(group.size), format!("{} \u{b7} Click to open", files(group.count)))
+        }
+        (Some(Hover::Target(Target::GroupRest(g))), Some(breakdown)) => {
+            let (count, size, what) = group_rest(explorer, breakdown, g);
+            (format!("{} smaller {what}", format::count(count)), format::bytes(size), String::new())
+        }
+        (Some(Hover::Center), Some(breakdown)) if explorer.group_focus.is_some() => {
+            let g = explorer.group_root();
+            let back = match breakdown.group(g).parent {
+                Some(parent) if parent != Breakdown::ROOT => group_name(breakdown, parent),
+                _ => explorer.tree.node(explorer.focus).name.to_string(),
+            };
+            (format!("Back to {back}"), format::bytes(breakdown.group(g).size), String::new())
+        }
+        (None, Some(breakdown)) if explorer.group_focus.is_some() => {
+            let g = explorer.group_root();
+            let group = breakdown.group(g);
+            (group_name(breakdown, g), format::bytes(group.size), files(group.count))
+        }
+        (Some(Hover::Center), _) if explorer.focus != Tree::ROOT => {
             let parent = explorer.tree.node(explorer.focus).parent.unwrap_or(Tree::ROOT);
-            (format!("Back to {}", explorer.tree.node(parent).name), node.size, "")
+            (format!("Back to {}", explorer.tree.node(parent).name), figure(explorer, explorer.focus), String::new())
         }
         _ => {
             let node = explorer.tree.node(explorer.focus);
-            (node.name.to_string(), node.size, "")
+            (node.name.to_string(), figure(explorer, explorer.focus), String::new())
         }
     };
     // The label lives inside the center disc, so it scales with the chart.
     // Measured in window pixels, so it is brought back to design units for `px`.
-    let inner = explorer.chart_bounds.get().map_or(80.0, |b| Geometry::new(b).inner) / crate::ui::UI_SCALE;
+    let inner =
+        explorer.chart_bounds.get().map_or(80.0, |b| Geometry::new(b, rings).inner) / crate::ui::UI_SCALE;
     let center_width = inner * 1.55;
     let name_size = (inner * 0.13).clamp(11.0, 15.0);
-    let value_size = (inner * 0.25).clamp(17.0, 34.0);
+    let value_size = (inner * 0.25).clamp(17.0, 34.0) * if explorer.mode == ChartMode::Count { 0.8 } else { 1.0 };
     let hint_size = (inner * 0.105).clamp(10.0, 12.5);
 
     let chart_drag = explorer.chart_drag.clone();
-    let going_up = explorer.hover == Some(Hover::Center) && explorer.focus != Tree::ROOT;
-    let label_key = format!("{}-{:?}", explorer.focus, explorer.hover);
-    let pointer = matches!(explorer.hover, Some(Hover::Target(Target::Node(_))))
-        || (matches!(explorer.hover, Some(Hover::Center)) && explorer.focus != Tree::ROOT);
+    let can_go_up = explorer.focus != Tree::ROOT || explorer.group_focus.is_some();
+    let going_up = explorer.hover == Some(Hover::Center) && can_go_up;
+    let label_key = format!("{}-{:?}-{:?}", explorer.focus, explorer.mode, explorer.hover);
+    let types = explorer.mode == ChartMode::Types;
+    let pointer = (!types && matches!(explorer.hover, Some(Hover::Target(Target::Node(_)))))
+        || matches!(explorer.hover, Some(Hover::Target(Target::Group(_))))
+        || going_up;
 
     div()
         .id("chart")
@@ -364,8 +519,9 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
             if event.pressed_button.is_some() {
                 return;
             }
+            let rings = explorer.rings();
             let hover = explorer.chart_bounds.get().and_then(|bounds| {
-                match sunburst::hit_test(&explorer.segments, &Geometry::new(bounds), event.position)? {
+                match sunburst::hit_test(&explorer.segments, &Geometry::new(bounds, rings), event.position)? {
                     Hit::Center => Some(Hover::Center),
                     Hit::Segment(ix) => Some(Hover::Target(explorer.segments[ix].target)),
                 }
@@ -425,11 +581,15 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
             let Some(explorer) = this.explorer() else { return };
             match explorer.hover {
                 Some(Hover::Center) => {
-                    if let Some(parent) = explorer.tree.node(explorer.focus).parent {
+                    if !explorer.group_up()
+                        && let Some(parent) = explorer.tree.node(explorer.focus).parent
+                    {
                         explorer.set_focus(parent);
                     }
                 }
-                Some(Hover::Target(Target::Node(id))) => explorer.set_focus(id),
+                // File types open like folders; the files inside them don't.
+                Some(Hover::Target(Target::Group(g))) => explorer.open_group(Some(g)),
+                Some(Hover::Target(Target::Node(id))) if explorer.mode != ChartMode::Types => explorer.set_focus(id),
                 _ => return,
             }
             cx.notify();
@@ -449,6 +609,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         collected,
                         center_hover,
                         center_tint: theme::accent().into(),
+                        rings,
                     };
                     sunburst::paint(&segments, bounds, &state, window);
                 },
@@ -486,7 +647,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                                 .text_size(px(value_size))
                                 .font_weight(FontWeight::BOLD)
                                 .whitespace_nowrap()
-                                .child(format::bytes(label_size)),
+                                .child(label_value),
                         )
                         .when(!label_hint.is_empty(), |s| {
                             s.child(
@@ -510,30 +671,30 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
 }
 
 /// Per-segment highlight, background dim and center glow, cross-fading between the
-/// previous and current hover so moving across the chart feels continuous.
+/// previous and current hover so moving across the chart feels continuous. A hovered
+/// slice lights up together with everything drawn outside it, within its span.
 fn hover_weights(explorer: &Explorer, segments: &[Segment]) -> (Vec<f32>, f32, f32) {
     if explorer.zoom.is_some() || (explorer.hover.is_none() && explorer.prev_hover.is_none()) {
         return (Vec::new(), 0.0, 0.0);
     }
-    let tree = &explorer.tree;
     let t = explorer.hover_progress();
-    let can_go_up = explorer.focus != Tree::ROOT;
-    let belongs = |hover: Option<Hover>, segment: &Segment| -> bool {
-        match hover {
-            Some(Hover::Target(Target::Node(id))) => match segment.target {
-                Target::Node(sid) => tree.is_ancestor(id, sid),
-                Target::Smaller(parent) => tree.is_ancestor(id, parent),
-            },
-            Some(Hover::Target(smaller)) => segment.target == smaller,
-            _ => false,
-        }
+    let can_go_up = explorer.focus != Tree::ROOT || explorer.group_focus.is_some();
+    let span = |hover: Option<Hover>| match hover {
+        Some(Hover::Target(target)) => segments.iter().find(|s| s.target == target).map(|s| (s.depth, s.start, s.end)),
+        _ => None,
+    };
+    let belongs = |span: Option<(usize, f32, f32)>, segment: &Segment| {
+        span.is_some_and(|(depth, start, end)| {
+            segment.depth >= depth && segment.start >= start - 1e-6 && segment.end <= end + 1e-6
+        }) as u8 as f32
     };
     let is_target = |hover: Option<Hover>| matches!(hover, Some(Hover::Target(_))) as u8 as f32;
     let is_center = |hover: Option<Hover>| (can_go_up && hover == Some(Hover::Center)) as u8 as f32;
     let (cur, prev) = (explorer.hover, explorer.prev_hover);
+    let (cur_span, prev_span) = (span(cur), span(prev));
     let highlight = segments
         .iter()
-        .map(|s| belongs(cur, s) as u8 as f32 * t + belongs(prev, s) as u8 as f32 * (1.0 - t))
+        .map(|s| belongs(cur_span, s) * t + belongs(prev_span, s) * (1.0 - t))
         .collect();
     let dim = is_target(cur) * t + is_target(prev) * (1.0 - t);
     let center = is_center(cur) * t + is_center(prev) * (1.0 - t);
@@ -548,7 +709,8 @@ fn hint_for(kind: NodeKind) -> &'static str {
     }
 }
 
-fn smaller_summary(explorer: &Explorer, parent: NodeId) -> (usize, u64) {
+/// How many of a folder's children are folded into its "smaller items" slice, and their figure.
+fn smaller_summary(explorer: &Explorer, parent: NodeId) -> (usize, String) {
     let shown: Vec<NodeId> = explorer
         .segments
         .iter()
@@ -565,108 +727,165 @@ fn smaller_summary(explorer: &Explorer, parent: NodeId) -> (usize, u64) {
         .copied()
         .filter(|c| !shown.contains(c))
         .collect();
-    (rest.len(), rest.iter().map(|c| explorer.tree.node(*c).size).sum())
+    let value = match explorer.mode {
+        ChartMode::Count => files(rest.iter().map(|c| explorer.tree.node(*c).items).sum()),
+        _ => format::bytes(rest.iter().map(|c| explorer.tree.node(*c).size).sum()),
+    };
+    (rest.len(), value)
 }
 
-fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
-    let listed = explorer.listed();
-    let previewing = explorer.preview.is_some();
-    let focus = explorer.tree.node(listed);
-    let focus_size = focus.size.max(1);
-    let hovered = explorer.hovered_node();
-    let children: Vec<NodeId> = focus.children.iter().copied().take(MAX_ROWS).collect();
+/// What a group's "smaller" slice holds: how many members, their size, and what to call them.
+fn group_rest(explorer: &Explorer, breakdown: &Breakdown, g: u32) -> (u64, u64, String) {
+    let shown = |target: Target| explorer.segments.iter().any(|s| s.target == target);
+    let group = breakdown.group(g);
+    if group.groups.is_empty() {
+        // An extension: the files beyond its biggest few.
+        let drawn: Vec<NodeId> = group.files.iter().copied().filter(|f| shown(Target::Node(*f))).collect();
+        let size = group.size - drawn.iter().map(|f| explorer.tree.node(*f).size).sum::<u64>();
+        let name = if group.name.starts_with('.') { format!("{} files", group.name) } else { "files".into() };
+        return (group.count - drawn.len() as u64, size, name);
+    }
+    let rest: Vec<u32> = group.groups.iter().copied().filter(|c| !shown(Target::Group(*c))).collect();
+    let size = rest.iter().map(|c| breakdown.group(*c).size).sum();
+    (rest.len() as u64, size, "file types".into())
+}
 
-    let remaining = focus.children.len().saturating_sub(MAX_ROWS);
-    let focus_path = explorer.tree.path(listed);
-    // While peeking, the header folder takes the color of its slice in the chart.
-    let header_color: Hsla = if previewing { row_color(explorer, listed) } else { theme::text_muted().into() };
-    let addable = listed != Tree::ROOT && !explorer.is_collected(listed);
-    let items = focus.items;
-    let (focus_num, focus_unit) = format::bytes_parts(focus.size);
+/// One line of the sidebar list: a folder, file, file type or extension.
+struct Row {
+    key: (&'static str, usize),
+    target: Target,
+    name: String,
+    /// Shown faintly after the name, e.g. an extension's file type.
+    detail: Option<&'static str>,
+    glyph: Icon,
+    color: Hsla,
+    /// Share of the listed whole, by the chart's measure.
+    ratio: f32,
+    figure: String,
+    /// A real item, which can be opened, dragged and right-clicked.
+    node: Option<NodeId>,
+    /// Clicking opens it in the chart.
+    opens: bool,
+    collected: bool,
+    muted: bool,
+}
 
-    let rows = children.iter().copied().enumerate().map(|(ix, id)| {
-        let node = explorer.tree.node(id);
-        let color = row_color(explorer, id);
-        let ratio = node.size as f32 / focus_size as f32;
-        // A row stays lit while its right-click menu is open.
-        let is_hovered = hovered == Some(id) || explorer.context.is_some_and(|(c, _)| c == id);
-        let t = fx::track(("row", id as usize), is_hovered);
-        let collected = explorer.is_collected(id);
-        let kind = node.kind;
-        let name = node.name.to_string();
-        let size = format::bytes(node.size);
-        let percent = format_percent(ratio);
-        let drag = explorer.drag_item(id);
-        let glyph = match kind {
-            NodeKind::Dir => Icon::Folder,
-            NodeKind::File => Icon::File,
-            NodeKind::Hidden => Icon::Disc,
-        };
+/// Rows smaller than this share of the list are drawn as one compact line.
+const COMPACT_RATIO: f32 = 0.001;
 
-        let row = div()
-            .id(("row", id as usize))
-            .group("row")
-            .relative()
-            .flex()
-            .items_center()
-            .gap_3()
-            .h(px(50.))
-            .pl_2()
-            .pr_2p5()
-            .mx_2()
-            .rounded(px(11.))
-            .border_1()
-            .border_color(color.opacity(0.28 * t))
-            .bg(linear_gradient(
-                90.,
-                linear_color_stop(color.opacity(0.16 * t), 0.),
-                linear_color_stop(color.opacity(0.03 * t), 1.),
-            ))
-            .when(kind == NodeKind::Dir, |s| s.cursor_pointer())
-            .when(collected, |s| s.opacity(0.4))
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                let Some(explorer) = this.explorer() else { return };
-                let next = if *hovered {
-                    Some(Hover::Target(Target::Node(id)))
-                } else if explorer.hover == Some(Hover::Target(Target::Node(id))) {
-                    None
-                } else {
-                    return;
-                };
-                explorer.set_hover(next);
-                cx.notify();
-            }))
-            .on_click(cx.listener(move |this, _, _, cx| {
+fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: bool, cx: &mut Context<Burrdisk>) -> AnyElement {
+    let Row { key, target, name, detail, glyph, color, ratio, figure, node, opens, collected, muted } = row;
+    // A row stays lit while its right-click menu is open.
+    let is_hovered = explorer.hover == Some(Hover::Target(target))
+        || node.is_some_and(|id| explorer.context.is_some_and(|(c, _)| c == id));
+    let t = fx::track(key, is_hovered);
+    let compact = ratio < COMPACT_RATIO;
+    let drag = node.and_then(|id| explorer.drag_item(id));
+    let tint = Hsla { l: (color.l + 0.10 + 0.08 * t).min(0.92), ..color };
+
+    let base = div()
+        .id(key)
+        .relative()
+        .flex()
+        .items_center()
+        .mx_2()
+        .border_1()
+        .border_color(color.opacity(0.28 * t))
+        .bg(linear_gradient(
+            90.,
+            linear_color_stop(color.opacity(0.16 * t), 0.),
+            linear_color_stop(color.opacity(0.03 * t), 1.),
+        ))
+        .when(opens, |s| s.cursor_pointer())
+        .when(collected, |s| s.opacity(0.4))
+        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+            let Some(explorer) = this.explorer() else { return };
+            let next = if *hovered {
+                Some(Hover::Target(target))
+            } else if explorer.hover == Some(Hover::Target(target)) {
+                None
+            } else {
+                return;
+            };
+            explorer.set_hover(next);
+            cx.notify();
+        }))
+        .when(opens, |s| {
+            s.on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(explorer) = this.explorer() {
-                    explorer.set_focus(id);
+                    match target {
+                        Target::Node(id) => explorer.set_focus(id),
+                        Target::Group(g) => explorer.open_group(Some(g)),
+                        _ => return,
+                    }
                     cx.notify();
                 }
             }))
-            .on_mouse_down(
+        })
+        .when_some(node, |s, id| {
+            s.on_mouse_down(
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| open_item_menu(this, id, event, cx)),
             )
-            .when_some(drag, |s, item| {
-                s.on_drag(item, |item: &DragItem, offset, _, cx| {
-                    let item = Some(item.clone());
-                    cx.new(|_| DragPreview { item, offset })
-                })
+        })
+        .when_some(drag, |s, item| {
+            s.on_drag(item, |item: &DragItem, offset, _, cx| {
+                let item = Some(item.clone());
+                cx.new(|_| DragPreview { item, offset })
             })
-            // Colored tile, brighter when the row is hovered.
+        });
+
+    let name_el = |size: f32, weight: FontWeight| {
+        div()
+            .flex()
+            .flex_1()
+            .min_w_0()
+            .items_baseline()
+            .gap_1p5()
             .child(
                 div()
-                    .flex()
-                    .flex_none()
-                    .items_center()
-                    .justify_center()
-                    .size(px(32.))
-                    .rounded(px(9.))
-                    .bg(color.opacity(0.16 + 0.14 * t))
-                    .border_1()
-                    .border_color(color.opacity(0.30))
-                    .when(t > 0.0, |s| s.shadow(glow(color, 1.2 * t)))
-                    .child(icon(glyph, 15.0, Hsla { l: (color.l + 0.12).min(0.9), ..color })),
+                    .min_w_0()
+                    .text_size(px(size))
+                    .font_weight(weight)
+                    .truncate()
+                    .when(muted, |s| s.text_color(theme::text_muted()))
+                    .child(name.clone()),
             )
+            .when_some(detail, |s, detail| {
+                s.child(div().flex_none().text_xs().text_color(theme::text_faint()).child(detail))
+            })
+    };
+    let chevron = div().w(px(12.)).flex_none().when(opens, |s| {
+        s.child(icon(Icon::ChevronRight, if compact { 10.0 } else { 12.0 }, fx::mix(theme::text_faint(), theme::text(), t)))
+    });
+
+    let el = if compact {
+        // Crumbs: one short line, so a long tail of tiny items stays out of the way.
+        base.gap_2p5()
+            .h(px(26.))
+            .pl(px(14.))
+            .pr_2p5()
+            .rounded(px(8.))
+            .child(icon(glyph, 13.0, tint.opacity(0.8 + 0.2 * t)))
+            .child(
+                name_el(13.0, FontWeight::NORMAL)
+                    .text_color(fx::mix(theme::text_muted(), theme::text(), t)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .text_color(fx::mix(theme::text_faint(), theme::text_muted(), t))
+                    .child(figure),
+            )
+            .child(chevron)
+    } else {
+        base.gap_3()
+            .h(px(50.))
+            .pl(px(12.))
+            .pr_2p5()
+            .rounded(px(11.))
+            .child(div().flex().flex_none().justify_center().w(px(20.)).child(icon(glyph, 18.0, tint)))
             .child(
                 div()
                     .relative()
@@ -675,14 +894,7 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                     .flex_1()
                     .min_w_0()
                     .gap(px(6.))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::MEDIUM)
-                            .truncate()
-                            .when(kind == NodeKind::Hidden, |s| s.text_color(theme::text_muted()))
-                            .child(name),
-                    )
+                    .child(name_el(14.0, FontWeight::MEDIUM))
                     .child(
                         div()
                             .h(px(3.))
@@ -696,7 +908,7 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                                     .bg(color.opacity(0.75 + 0.25 * t))
                                     .w(relative(ratio.clamp(0.015, 1.0))),
                             ),
-                    )
+                    ),
             )
             .child(
                 div()
@@ -704,53 +916,223 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                     .flex_col()
                     .flex_none()
                     .items_end()
-                    .w(px(70.))
-                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(size))
-                    .child(div().text_xs().text_color(theme::text_faint()).child(percent)),
+                    .min_w(px(70.))
+                    .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).whitespace_nowrap().child(figure))
+                    .child(div().text_xs().text_color(theme::text_faint()).child(format_percent(ratio))),
             )
-            .child(div().w(px(12.)).flex_none().when(kind == NodeKind::Dir, |s| {
-                s.child(icon(Icon::ChevronRight, 12.0, fx::mix(theme::text_faint(), theme::text(), t)))
-            }));
+            .child(chevron)
+    };
 
-        // The first screenful cascades in each time the folder changes.
-        // Peeking via the chart swaps lists often, so it uses a quicker, flatter fade.
-        if ix < ANIMATED_ROWS {
-            let (step, length, rise) = if previewing { (0.012, 0.18, 4.0) } else { (0.024, 0.30, 10.0) };
-            let delay = ix as f32 * step;
-            let total = delay + length;
-            row.with_animation(
-                ElementId::Name(format!("row-in-{listed}-{id}").into()),
-                Animation::new(Duration::from_secs_f32(total)),
-                move |el, t| {
-                    let local = sunburst::ease_out_cubic(((t * total - delay) / length).clamp(0.0, 1.0));
-                    el.opacity(local).top(px(rise * (1. - local)))
-                },
-            )
-            .into_any_element()
-        } else {
-            row.into_any_element()
+    // The first screenful cascades in each time the list changes.
+    // Peeking via the chart swaps lists often, so it uses a quicker, flatter fade.
+    if ix < ANIMATED_ROWS {
+        let (step, length, rise) = if previewing { (0.012, 0.18, 4.0) } else { (0.024, 0.30, 10.0) };
+        let delay = ix as f32 * step;
+        let total = delay + length;
+        el.with_animation(
+            ElementId::Name(format!("row-in-{list_key}-{}-{}", key.0, key.1).into()),
+            Animation::new(Duration::from_secs_f32(total)),
+            move |el, t| {
+                let local = sunburst::ease_out_cubic(((t * total - delay) / length).clamp(0.0, 1.0));
+                el.opacity(local).top(px(rise * (1. - local)))
+            },
+        )
+        .into_any_element()
+    } else {
+        el.into_any_element()
+    }
+}
+
+/// A file or folder row in the folder charts, or an item row in the type chart.
+fn node_row(explorer: &Explorer, id: NodeId, whole: u64, color: Hsla) -> Row {
+    let node = explorer.tree.node(id);
+    let types = explorer.mode == ChartMode::Types;
+    let part = match explorer.mode {
+        ChartMode::Count => node.items,
+        _ => node.size,
+    };
+    Row {
+        key: ("row", id as usize),
+        target: Target::Node(id),
+        name: node.name.to_string(),
+        detail: None,
+        glyph: item_icon(&node.name, node.kind),
+        color,
+        ratio: part as f32 / whole.max(1) as f32,
+        figure: figure(explorer, id),
+        node: (node.kind != NodeKind::Hidden).then_some(id),
+        opens: node.kind == NodeKind::Dir && !types,
+        collected: explorer.is_collected(id),
+        muted: node.kind == NodeKind::Hidden,
+    }
+}
+
+fn group_row(breakdown: &Breakdown, g: u32, whole: u64, detail: bool) -> Row {
+    let group = breakdown.group(g);
+    let color = sunburst::type_color(group.category, breakdown.level(g), group.spread);
+    Row {
+        key: ("group-row", g as usize),
+        target: Target::Group(g),
+        name: group.name.clone(),
+        detail: detail.then(|| group.category.label()),
+        glyph: category_icon(group.category),
+        color,
+        ratio: group.size as f32 / whole.max(1) as f32,
+        figure: format::bytes(group.size),
+        node: None,
+        opens: true,
+        collected: false,
+        muted: false,
+    }
+}
+
+/// What the sidebar lists, and how its header describes the whole.
+struct Listing {
+    key: String,
+    title: String,
+    title_color: Hsla,
+    title_icon: Icon,
+    /// The header's big figure, as number and unit.
+    figure: (String, String),
+    /// The header's secondary figure.
+    aside: String,
+    rows: Vec<Row>,
+    /// Items beyond the listed rows.
+    remaining: usize,
+    /// A real folder the header acts on: collect it, reveal it.
+    folder: Option<NodeId>,
+}
+
+fn folder_listing(explorer: &Explorer) -> Listing {
+    let listed = explorer.listed();
+    let previewing = explorer.preview.is_some();
+    let node = explorer.tree.node(listed);
+    let count_mode = explorer.mode == ChartMode::Count;
+    let mut children = node.children.clone();
+    if count_mode {
+        children.sort_by(|a, b| explorer.tree.node(*b).items.cmp(&explorer.tree.node(*a).items));
+    }
+    let whole = if count_mode { node.items } else { node.size };
+    let remaining = children.len().saturating_sub(MAX_ROWS);
+    let rows = children
+        .iter()
+        .take(MAX_ROWS)
+        .map(|&id| node_row(explorer, id, whole, row_color(explorer, id)))
+        .collect();
+    let figure = if count_mode {
+        (format::count(node.items), if node.items == 1 { "file" } else { "files" }.into())
+    } else {
+        format::bytes_parts(node.size)
+    };
+    let aside = if count_mode { format::bytes(node.size) } else { files(node.items) };
+    Listing {
+        key: format!("{listed}-{:?}", explorer.mode),
+        title: node.name.to_string(),
+        // While peeking, the header folder takes the color of its slice in the chart.
+        title_color: if previewing { row_color(explorer, listed) } else { theme::text_muted().into() },
+        title_icon: Icon::FolderOpen,
+        figure,
+        aside,
+        rows,
+        remaining,
+        folder: Some(listed),
+    }
+}
+
+fn type_listing(explorer: &Explorer, breakdown: &Breakdown) -> Listing {
+    let focus = explorer.tree.node(explorer.focus);
+    let Some(g) = explorer.group_preview.or(explorer.group_focus) else {
+        // Every extension in the folder, biggest first, each marked with its type.
+        let mut exts: Vec<u32> = (0..breakdown.groups.len() as u32)
+            .filter(|g| breakdown.group(*g).groups.is_empty() && *g != Breakdown::ROOT)
+            .collect();
+        exts.sort_by(|a, b| breakdown.group(*b).size.cmp(&breakdown.group(*a).size));
+        let hidden = breakdown.hidden.map(|id| explorer.tree.node(id).size).unwrap_or(0);
+        let whole = breakdown.group(Breakdown::ROOT).size + hidden;
+        let mut rows: Vec<Row> = Vec::new();
+        if let Some(id) = breakdown.hidden {
+            rows.push(node_row(explorer, id, whole, row_color(explorer, id)));
         }
-    });
+        rows.extend(exts.iter().take(MAX_ROWS).map(|g| group_row(breakdown, *g, whole, true)));
+        rows.sort_by(|a, b| b.ratio.total_cmp(&a.ratio));
+        return Listing {
+            key: format!("{}-types", explorer.focus),
+            title: focus.name.to_string(),
+            title_color: theme::text_muted().into(),
+            title_icon: Icon::FolderOpen,
+            figure: format::bytes_parts(focus.size),
+            aside: files(breakdown.group(Breakdown::ROOT).count),
+            rows,
+            remaining: exts.len().saturating_sub(MAX_ROWS),
+            folder: Some(explorer.focus),
+        };
+    };
+    let group = breakdown.group(g);
+    let rows: Vec<Row> = if group.groups.is_empty() {
+        group
+            .files
+            .iter()
+            .map(|&id| node_row(explorer, id, group.size, row_color(explorer, id)))
+            .collect()
+    } else {
+        group.groups.iter().take(MAX_ROWS).map(|c| group_row(breakdown, *c, group.size, false)).collect()
+    };
+    let remaining = if group.groups.is_empty() {
+        (group.count as usize).saturating_sub(rows.len())
+    } else {
+        group.groups.len().saturating_sub(MAX_ROWS)
+    };
+    let title_color = sunburst::type_color(group.category, breakdown.level(g), group.spread);
+    Listing {
+        key: format!("{}-group-{g}", explorer.focus),
+        title: group_name(breakdown, g),
+        title_color,
+        title_icon: category_icon(group.category),
+        figure: format::bytes_parts(group.size),
+        aside: files(group.count),
+        rows,
+        remaining,
+        folder: None,
+    }
+}
 
-    // Composition strip: the biggest items side by side, in their chart colors.
-    let strip: Vec<AnyElement> = children
+fn sidebar(explorer: &Explorer, full_disk_access: bool, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    let listing = match explorer.breakdown.as_deref() {
+        Some(breakdown) => type_listing(explorer, breakdown),
+        None => folder_listing(explorer),
+    };
+    let previewing = explorer.preview.is_some() || explorer.group_preview.is_some();
+    let Listing { key: list_key, title, title_color, title_icon, figure: (focus_num, focus_unit), aside, rows, remaining, folder } =
+        listing;
+    let hovered = explorer.hover;
+
+    // Composition strip: the biggest rows side by side, in their chart colors.
+    let strip: Vec<AnyElement> = rows
         .iter()
         .take(14)
-        .filter_map(|&id| {
-            let ratio = explorer.tree.node(id).size as f32 / focus_size as f32;
-            (ratio >= 0.004).then(|| {
-                div()
-                    .h_full()
-                    .w(relative(ratio))
-                    .bg(row_color(explorer, id))
-                    .when(hovered == Some(id), |s| s.opacity(1.0))
-                    .when(hovered.is_some() && hovered != Some(id), |s| s.opacity(0.35))
-                    .into_any_element()
-            })
+        .filter(|r| r.ratio >= 0.004)
+        .map(|r| {
+            let lit = hovered == Some(Hover::Target(r.target));
+            div()
+                .h_full()
+                .w(relative(r.ratio))
+                .bg(r.color)
+                .when(hovered.is_some() && !lit, |s| s.opacity(0.35))
+                .into_any_element()
         })
         .collect();
 
-    let footer = (listed == Tree::ROOT)
+    let rows: Vec<AnyElement> = rows
+        .into_iter()
+        .enumerate()
+        .map(|(ix, r)| row(explorer, r, ix, &list_key, previewing, cx))
+        .collect();
+
+    let at_root = folder == Some(Tree::ROOT);
+    let addable = folder.is_some_and(|f| f != Tree::ROOT && !explorer.is_collected(f));
+    let reveal_path = folder.map(|f| explorer.tree.path(f));
+
+    let footer = at_root
         .then(|| explorer.target.volume.clone())
         .flatten()
         .map(|volume| {
@@ -769,18 +1151,8 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                 .child(footer_row("Capacity", format::bytes(volume.total)))
         });
 
-    let hidden_hint = cfg!(target_os = "macos")
-        && listed == Tree::ROOT
-        && explorer.target.path == std::path::Path::new("/")
-        && explorer
-            .tree
-            .node(Tree::ROOT)
-            .children
-            .iter()
-            .any(|c| {
-                let n = explorer.tree.node(*c);
-                n.kind == NodeKind::Hidden && n.size > explorer.tree.node(Tree::ROOT).size / 5
-            });
+    // Without Full Disk Access, macOS hides whole app libraries from the scan.
+    let access_hint = at_root && !full_disk_access && volumes::needs_full_disk_access(&explorer.target.path);
 
     div()
         .flex()
@@ -803,7 +1175,7 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child(icon(Icon::FolderOpen, 16.0, header_color))
+                        .child(icon(title_icon, 16.0, title_color))
                         .child(
                             div()
                                 .flex_1()
@@ -812,9 +1184,9 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .whitespace_nowrap()
                                 .truncate()
-                                .child(focus.name.to_string()),
+                                .child(title),
                         )
-                        .when(addable, |s| {
+                        .when_some(folder.filter(|_| addable), |s, listed| {
                             s.child(
                                 icon_button(
                                     "collect-focus",
@@ -829,12 +1201,12 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                                 .size(px(24.)),
                             )
                         })
-                        .child(
-                            icon_button("reveal-focus", Icon::ArrowUpRight, move |_, _, cx| {
-                                cx.reveal_path(&focus_path)
-                            })
-                            .size(px(24.)),
-                        ),
+                        .when_some(reveal_path, |s, path| {
+                            s.child(
+                                icon_button("reveal-focus", Icon::ArrowUpRight, move |_, _, cx| cx.reveal_path(&path))
+                                    .size(px(24.)),
+                            )
+                        }),
                 )
                 .child(
                     div()
@@ -848,7 +1220,7 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                                 .text_xs()
                                 .text_color(theme::text_faint())
                                 .whitespace_nowrap()
-                                .child(format!("{} items", format::count(items))),
+                                .child(aside),
                         ),
                 )
                 .child(
@@ -864,30 +1236,7 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
                         .children(strip),
                 ),
         )
-        .when(hidden_hint, |s| {
-            s.child(
-                div()
-                    .id("fda-hint")
-                    .mx_3()
-                    .mb_2()
-                    .p_3()
-                    .rounded(px(10.))
-                    .bg(theme::accent_soft())
-                    .text_xs()
-                    .text_color(theme::text_muted())
-                    .cursor_pointer()
-                    .on_click(|_, _, cx| {
-                        cx.open_url("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
-                    })
-                    .child(
-                        div()
-                            .text_color(theme::text())
-                            .font_weight(FontWeight::MEDIUM)
-                            .child("Lots of hidden space?"),
-                    )
-                    .child("Give Burrdisk Full Disk Access in System Settings, then rescan."),
-            )
-        })
+        .when(access_hint, |s| s.child(access_panel()))
         .child(
             div()
                 .id("rows")
@@ -910,6 +1259,55 @@ fn sidebar(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement 
         .children(footer)
 }
 
+/// Explains Hidden space and leads straight to the setting that shrinks it.
+fn access_panel() -> impl IntoElement {
+    let t = fx::hover("access-panel");
+    div()
+        .id("access-panel")
+        .on_hover(fx::on_hover("access-panel"))
+        .flex()
+        .items_start()
+        .gap_2p5()
+        .mx_3()
+        .mb_2()
+        .p_3()
+        .rounded(px(10.))
+        .border_1()
+        .border_color(Hsla::from(theme::accent()).opacity(0.22 + 0.2 * t))
+        .bg(theme::accent_soft())
+        .cursor_pointer()
+        .on_click(|_, _, cx| cx.open_url(volumes::FULL_DISK_ACCESS_SETTINGS))
+        .child(div().pt(px(1.)).child(icon(Icon::ShieldAlert, 16.0, theme::accent_hi())))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap_0p5()
+                .text_xs()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::text())
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Full Disk Access is off"),
+                )
+                .child(
+                    div()
+                        .text_color(theme::text_muted())
+                        .child("macOS is hiding app data from the scan, so it piles up as Hidden space."),
+                )
+                .child(
+                    div()
+                        .mt_1()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(fx::mix(theme::accent_hi(), theme::accent(), t))
+                        .child("Open System Settings, then rescan"),
+                ),
+        )
+}
+
 fn footer_row(label: &'static str, value: String) -> impl IntoElement {
     div()
         .flex()
@@ -926,7 +1324,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
 
     let chips = explorer.collected.iter().map(|&id| {
         let node = explorer.tree.node(id);
-        let glyph = if node.kind == NodeKind::Dir { Icon::Folder } else { Icon::File };
+        let glyph = item_icon(&node.name, node.kind);
         let color = row_color(explorer, id);
         div()
             .id(("chip", id as usize))
@@ -1201,7 +1599,7 @@ impl Render for DragPreview {
         let Some(item) = &self.item else {
             return div();
         };
-        let glyph = if item.kind == NodeKind::Dir { Icon::Folder } else { Icon::File };
+        let glyph = item_icon(&item.name, item.kind);
         div().pl(self.offset.x + px(10.)).pt(self.offset.y + px(10.)).child(
             div()
                 .flex()

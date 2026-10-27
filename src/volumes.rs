@@ -189,3 +189,36 @@ pub fn get_info(path: &Path) {
     #[cfg(not(any(target_os = "macos", windows)))]
     let _ = path;
 }
+
+/// The Full Disk Access pane of System Settings.
+pub const FULL_DISK_ACCESS_SETTINGS: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
+
+/// Whether macOS lets this app read everywhere. Without Full Disk Access, Mail,
+/// Messages, Safari and other apps' data stay invisible to a scan.
+pub fn has_full_disk_access() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::ErrorKind;
+        // The privacy database itself is only readable with Full Disk Access.
+        match std::fs::File::open("/Library/Application Support/com.apple.TCC/TCC.db") {
+            Ok(_) => true,
+            Err(error) if error.kind() == ErrorKind::PermissionDenied => false,
+            Err(_) => {
+                let Some(home) = std::env::var_os("HOME") else { return true };
+                let safari = Path::new(&home).join("Library/Safari");
+                !matches!(std::fs::read_dir(safari), Err(e) if e.kind() == ErrorKind::PermissionDenied)
+            }
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Whether scanning `path` would reach into folders macOS guards without Full Disk Access.
+pub fn needs_full_disk_access(path: &Path) -> bool {
+    cfg!(target_os = "macos")
+        && std::env::var_os("HOME").is_some_and(|home| Path::new(&home).starts_with(path))
+}
