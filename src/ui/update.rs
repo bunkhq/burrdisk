@@ -46,13 +46,13 @@ pub fn button_and_card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdis
         .gap(px(7.))
         .h(px(28.))
         .px(px(10.))
+        .relative()
         .rounded(px(9.))
-        .border_1()
-        .border_color(if open { theme::border().into() } else { fx::mix(gpui::transparent_black(), theme::border(), t) })
         .bg(if open { theme::raised().into() } else { fx::mix(gpui::transparent_black(), theme::surface_hover(), t) })
         .text_size(px(13.))
         .font_weight(FontWeight::SEMIBOLD)
         .whitespace_nowrap()
+        .child(fx::shine(t, gpui::white().opacity(0.34), px(9.)))
         .text_color(if clickable { ink } else { theme::text_faint().into() })
         .when(matches!(updater.phase, UpdatePhase::UpToDate(_)), |s| s.child(icon(Icon::Check, 13.0, theme::text_faint())))
         .when_some(dot, |s, dot| {
@@ -64,6 +64,7 @@ pub fn button_and_card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdis
         .when(clickable, |s| {
             s.cursor_pointer()
                 .on_hover(fx::on_hover(id))
+                .on_mouse_move(fx::on_move)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_update_card(cx)))
         })
         // Fades in where it appears, so a new release arrives without a jolt.
