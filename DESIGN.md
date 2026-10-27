@@ -1,6 +1,6 @@
 ---
 name: Burrdisk
-description: A native macOS disk space visualizer drawn as burrs and a sunburst you dive through.
+description: A native macOS and Windows disk space visualizer drawn as burrs and a sunburst you dive through.
 colors:
   ember: "#f97316"
   ember-hi: "#fdba74"
@@ -33,33 +33,33 @@ colors:
   text-faint: "#6b6b73"
 typography:
   display:
-    fontFamily: ".SystemUIFont (SF Pro), system-ui, -apple-system, sans-serif"
+    fontFamily: "Mona Sans (bundled), sans-serif"
     fontSize: "34px"
     fontWeight: 700
     lineHeight: "40px"
   figure:
-    fontFamily: ".SystemUIFont (SF Pro), system-ui, -apple-system, sans-serif"
+    fontFamily: "Mona Sans (bundled), sans-serif"
     fontSize: "24px"
     fontWeight: 700
     lineHeight: 1
   headline:
-    fontFamily: ".SystemUIFont (SF Pro), system-ui, -apple-system, sans-serif"
+    fontFamily: "Mona Sans (bundled), sans-serif"
     fontSize: "18px"
     fontWeight: 600
   title:
-    fontFamily: ".SystemUIFont (SF Pro), system-ui, -apple-system, sans-serif"
+    fontFamily: "Mona Sans (bundled), sans-serif"
     fontSize: "16px"
     fontWeight: 600
   body-lead:
-    fontFamily: ".SystemUIFont (SF Pro), system-ui, -apple-system, sans-serif"
+    fontFamily: "Mona Sans (bundled), sans-serif"
     fontSize: "17px"
     fontWeight: 400
   body:
-    fontFamily: ".SystemUIFont (SF Pro), system-ui, -apple-system, sans-serif"
+    fontFamily: "Mona Sans (bundled), sans-serif"
     fontSize: "14px"
     fontWeight: 400
   label:
-    fontFamily: ".SystemUIFont (SF Pro), system-ui, -apple-system, sans-serif"
+    fontFamily: "Mona Sans (bundled), sans-serif"
     fontSize: "12px"
     fontWeight: 400
 rounded:
@@ -162,7 +162,7 @@ The direction contract asked for a warm "loam" ground. The shipped ground is a c
 - The burr is the signature form: a filled seed core with tapered spines that end in a small bead, and that are always data-true.
 - Filled controls are lit from above: a vertical gradient, a brighter top edge, and a halo in their own color.
 - Depth comes from colored halos plus a 1px contact shadow, never hard offsets.
-- One system typeface. Weight and size carry hierarchy, and figures are set big and bold with a smaller muted unit.
+- One bundled typeface, Mona Sans, on every platform. Weight and size carry hierarchy, and figures are set big and bold with a smaller muted unit.
 
 ## Colors
 
@@ -198,15 +198,15 @@ A graphite ground with one warm brand voice (orange), one alarm voice (red), and
 
 **The Biggest Is Orange Rule.** The data wheel rotates so the largest child of the focused folder takes the wheel's start hue, near the brand orange. The biggest thing on screen therefore always reads as Burrdisk's color.
 
-**The Red Means Trash Rule.** Trash Red appears only where something is about to move to the Trash, or where a Trash operation failed.
+**The Red Means Trash Rule.** Trash Red appears only where something is about to move to the Trash, or where a Trash operation failed. The one other red is the Windows close button's hover, which is the platform's own convention, not Burrdisk's.
 
 ## Typography
 
-**Display Font:** the macOS system font (`.SystemUIFont`, SF Pro)
+**Display Font:** Mona Sans (SIL OFL, bundled in `assets/fonts/`: Regular, Medium, SemiBold, Bold)
 **Body Font:** the same family
 **Label/Mono Font:** none distinct
 
-**Character:** One native typeface, as a Mac utility should have. Hierarchy comes from weight (bold for names and figures, semibold for headings and buttons, medium for row names) and size, not from a second family.
+**Character:** One sturdy, warm grotesque, bundled so Burrdisk looks like itself on macOS and Windows alike instead of falling back to each platform's default. Hierarchy comes from weight (bold for names and figures, semibold for headings and buttons, medium for row names) and size, not from a second family. Figures are proportional: Mona Sans' tabular set uses a slashed zero, which reads as code in a consumer utility, so `tnum` stays off.
 
 ### Hierarchy
 - **Display** (700, 34px / 40px, scaled ×0.82–1.12 with window width around 1180px): the startup disk's name on home. Only one appears per screen.
@@ -224,7 +224,9 @@ A graphite ground with one warm brand voice (orange), one alarm voice (red), and
 
 ## Layout
 
-The app is one window with a native titlebar row (56px tall, 96px left inset to clear the traffic lights) and screen-specific content below.
+The app is one window with a drawn titlebar row (56px tall) and screen-specific content below. On macOS it keeps a 96px left inset to clear the traffic lights. On Windows the bar runs from the left edge, its empty space drags the window (double-click maximizes), and drawn minimize / maximize-or-restore / close buttons sit flush at the right end, each 46px wide and the bar's full height, with 10px 1px-stroke glyphs. Their hover is a 6% white wash, except Close, which takes Windows' own close red (`#c42b1c`) with a white glyph; glyphs go faint while the window is inactive.
+
+**Windows scale.** Every design size on Windows is drawn 1.2× (`ui::UI_SCALE`, applied by `ui::px` and the rem size; 1px hairlines stay 1px), because a Windows pixel at 100% scaling is far smaller than a macOS point. The numbers in this file are design units before that scale.
 
 - **Home:** a single scrolling column, max 960px wide and centered, with 44px side padding and 56px bottom padding. Sections are 52px apart. The startup disk is a two-column lead: a 300px burr (× scale) on the left, a 44px gap, then name, capacity, details, and the split button on the right. Other drives wrap as 296px-wide items (a 104px burr plus text) with a 28px column gap. Disk images form a two-column grid of 40px rows with a 24px column gap and a 4px row gap. Lists longer than 7 collapse to 6, and the rest slide open like a drawer.
 - **Explorer:** a full-bleed sunburst, a 360px sidebar on the right with a left hairline, and an 80px tray across the bottom that has a top hairline and a surface-to-ground gradient. Toasts float 96px above the bottom edge, centered, max 640px wide.
@@ -275,7 +277,7 @@ Tactile and lit, like small backlit keys.
 - **Chips:** 30px tall with 9px corners, a Raised→Surface gradient, a border in the item's data color at 35%, a 20px tinted icon tile, a 12px name (max 160px) and size, and a 22px X icon button. They enter with a 280ms fade and an 8px rise.
 - **Countdown:** 5 seconds. The count badge turns Trash Red and shows the seconds left inside a white ring that drains clockwise. Each new number drops into place and the badge's halo flares. Stop replaces the action; Esc also stops it.
 - **Collected items** drain to near-gray (saturation × 0.12) in the chart, the sidebar and the Collector chips.
-- **Item menu:** right-click a row or chart slice for Expand (or Open), Preview (Space), Show in Finder, Open in Terminal and Move to Collector (⌘⌫). Rows carry no hover buttons.
+- **Item menu:** right-click a row or chart slice for Expand (or Open), Preview (Space, macOS only), Show in Finder (File Explorer on Windows), Open in Terminal and Move to Collector (⌘⌫ / Ctrl+Backspace). Rows carry no hover buttons.
 
 ### Toast
 - A Raised pill with 14px corners and a border in its tone at 45%. It has a glow and a 26px round icon well that holds the tone at 20%. It enters over 320ms rising 12px, and fades out over its last 0.5s (shown for 6s).
@@ -310,5 +312,5 @@ Tactile and lit, like small backlit keys.
 - **Don't** replace a disk's burr with a ring gauge or a block of stat chips.
 - **Don't** use Trash Red for anything but moving to the Trash, its countdown, or its errors.
 - **Don't** cast neutral or hard-offset drop shadows under colored elements. Use the colored Glow.
-- **Don't** add a second typeface. Hierarchy comes from SF weight and size.
+- **Don't** add a second typeface. Hierarchy comes from Mona Sans' weight and size.
 - **Don't** add spines, rings, or colors that do not map to bytes on disk. The wordmark burr is the only ornamental burr.

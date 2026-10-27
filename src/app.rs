@@ -537,10 +537,10 @@ impl Burrdisk {
                 }
                 explorer.trashing = false;
                 let text = match (failed.len(), reason) {
-                    (0, _) => format!("Moved {} to the Trash", crate::format::bytes(freed)),
+                    (0, _) => format!("Moved {} to the {}", crate::format::bytes(freed), crate::platform::TRASH),
                     (n, Some(reason)) => {
                         let what = if n == 1 { failed[0].clone() } else { format!("{n} items") };
-                        format!("Couldn't move {what} to the Trash: {reason}")
+                        format!("Couldn't move {what} to the {}: {reason}", crate::platform::TRASH)
                     }
                     _ => unreachable!(),
                 };
@@ -746,7 +746,11 @@ impl Explorer {
 }
 
 /// Opens a Quick Look panel for a file or folder, as Space does in Finder.
+/// Windows has no Quick Look, so there Preview isn't offered at all.
 pub fn quick_look(path: &std::path::Path) {
+    #[cfg(windows)]
+    let _ = path;
+    #[cfg(not(windows))]
     std::process::Command::new("qlmanage")
         .arg("-p")
         .arg(path)
@@ -759,6 +763,20 @@ pub fn quick_look(path: &std::path::Path) {
 /// Opens Terminal in a folder, or in the folder holding a file.
 pub fn open_in_terminal(path: &std::path::Path) {
     let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_CONSOLE: u32 = 0x10;
+        // Windows Terminal if it's installed, else a plain console.
+        if std::process::Command::new("wt.exe").arg("-d").arg(dir).spawn().is_err() {
+            std::process::Command::new("cmd.exe")
+                .current_dir(dir)
+                .creation_flags(CREATE_NEW_CONSOLE)
+                .spawn()
+                .ok();
+        }
+    }
+    #[cfg(not(windows))]
     std::process::Command::new("open").args(["-a", "Terminal"]).arg(dir).spawn().ok();
 }
 
@@ -802,10 +820,23 @@ fn move_to_trash(items: Vec<(NodeId, PathBuf)>) -> Vec<(NodeId, Result<(), Strin
     }
     #[cfg(not(target_os = "macos"))]
     {
-        items
-            .into_iter()
-            .map(|(id, path)| (id, trash::delete(&path).map_err(|error| error.to_string())))
-            .collect()
+        let ids: Vec<NodeId> = items.iter().map(|(id, _)| *id).collect();
+        let run = move || -> Vec<(NodeId, Result<(), String>)> {
+            items
+                .into_iter()
+                .map(|(id, path)| (id, trash::delete(&path).map_err(|error| error.to_string())))
+                .collect()
+        };
+        // On Windows, `trash` sets up single-threaded COM and panics on a thread that
+        // already runs multithreaded COM, as the thread pool behind background tasks
+        // does. A thread of its own always starts clean.
+        if cfg!(windows) {
+            std::thread::spawn(run).join().unwrap_or_else(|_| {
+                ids.into_iter().map(|id| (id, Err("the system refused".to_string()))).collect()
+            })
+        } else {
+            run()
+        }
     }
 }
 
@@ -853,7 +884,7 @@ impl Render for Burrdisk {
             .flex_col()
             .bg(theme::bg())
             .text_color(theme::text())
-            .font_family(".SystemUIFont")
+            .font_family("Mona Sans")
             .child(content)
     }
 }

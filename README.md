@@ -1,8 +1,8 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<img src="assets/icon/macos-256.png" width="96" height="96" alt="">
 
 # Burrdisk
 
-A fast, friendly disk space visualizer for macOS, written in Rust with [GPUI](https://gpui.rs).
+A fast, friendly disk space visualizer for macOS and Windows, written in Rust with [GPUI](https://gpui.rs).
 
 - **Pick a disk.** Every disk is drawn as a burr. Before a scan its spines show how full it is; after one, they grow into its biggest folders. The menu beside each Scan button can rescan (also as administrator), forget a scan, show the disk in Finder or open Get Info.
 - **Explore.** An interactive sunburst: click a ring to dive into a folder, click the center to go back. The sidebar lists everything in the current folder, synced with the chart.
@@ -10,7 +10,10 @@ A fast, friendly disk space visualizer for macOS, written in Rust with [GPUI](ht
 
 ## Install
 
-Download `Burrdisk-<version>-arm64.zip` from [Releases](https://github.com/bunkhq/burrdisk/releases), unzip it and move `Burrdisk.app` to Applications. It's signed ad hoc rather than notarized, so the first launch needs right-click > Open (or System Settings > Privacy & Security > Open Anyway). Apple silicon only for now.
+Download from [Releases](https://github.com/bunkhq/burrdisk/releases):
+
+- **macOS:** open `Burrdisk-<version>-arm64.dmg` and drag Burrdisk to Applications. It's signed ad hoc rather than notarized, so the first launch needs right-click > Open (or System Settings > Privacy & Security > Open Anyway). Apple silicon only for now.
+- **Windows:** run `Burrdisk-<version>-windows-x64-setup.exe`. It installs for your user without an administrator prompt (or for everyone, if you choose), adds Burrdisk to the Start menu and can be removed from Settings > Apps. It isn't code signed, so SmartScreen may ask first (More info > Run anyway).
 
 ## Build
 
@@ -23,26 +26,31 @@ cargo run --release -- ~/Library # scan a folder directly
 
 For development with Full Disk Access, use `script/dev-app.sh` instead. It builds a `Burrdisk Dev.app` signed with a local certificate (created once in your login keychain), so the Full Disk Access grant survives rebuilds. Run `script/dev-app.sh --grant` the first time and add the app in System Settings.
 
-`script/bundle.sh` builds the release `Burrdisk.app` and zips it into `dist/`.
+`script/bundle.sh` builds the release `Burrdisk.app` and packs it into a disk image and a zip in `dist/`.
+
+The app icons are drawn by `script/icons/make_icons.py`; `script/icons/build.sh` renders them and packs `assets/macos/Burrdisk.icns` and `assets/windows/burrdisk.ico` (needs Python 3 and `cargo install resvg`).
 
 Without Xcode, build with `--features runtime_shaders` to compile Metal shaders at launch instead.
 
+On Windows, `cargo run --release` needs Visual Studio's C++ build tools and the Windows SDK. `script\bundle.ps1` builds the release `Burrdisk.exe`, its installer (with [Inno Setup 6](https://jrsoftware.org/isinfo.php)) and a portable zip into `dist\`.
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the disk image and the installer on GitHub's runners and attaches them to a draft release.
+
 ## Keyboard
 
-| Key | Action |
-| --- | --- |
-| `⌘[`, `⌘]` | Back up to the parent folder (or the disk list), and forward down the path you came back from |
-| `Esc`, `⌫`, `⌘↑` | Go up a folder (or back to the disk list); stops a Trash countdown |
-| `Space` | Quick Look the hovered item |
-| `⌘⌫` | Move the hovered item to the Collector |
-| `⌘Q` | Quit |
+| macOS | Windows | Action |
+| --- | --- | --- |
+| `⌘[`, `⌘]` | `Ctrl+[`, `Ctrl+]`, `Alt+←`, `Alt+→` | Back up to the parent folder (or the disk list), and forward down the path you came back from |
+| `Esc`, `⌫`, `⌘↑` | `Esc`, `Backspace`, `Ctrl+↑` | Go up a folder (or back to the disk list); stops a Trash countdown |
+| `Space` | | Quick Look the hovered item (macOS only) |
+| `⌘⌫` | `Ctrl+Backspace` | Move the hovered item to the Collector |
+| `⌘Q` | `Alt+F4` | Quit |
 
 ## Notes
 
 - Sizes are allocated bytes on disk, so sparse and compressed files count correctly. Hard links are counted once.
 - On the startup disk, space the scan can't see (snapshots, protected system files) shows as **Hidden space**. Give Burrdisk Full Disk Access in System Settings to see more.
-- Deleting moves items to the Trash. Nothing is removed permanently.
-
-Windows support is planned; the scanner and volume code are already cross-platform.
+- Deleting moves items to the Trash (the Recycle Bin on Windows). Nothing is removed permanently.
+- On Windows, files OneDrive keeps online only count as the space they use locally. Hard links (common under `C:\Windows\WinSxS`) are counted at every path, so that folder can read larger than it is. Rescan as Administrator goes through a UAC prompt.
 
 Created in [T3 Code](https://t3.codes).

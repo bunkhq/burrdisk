@@ -40,7 +40,7 @@ Home lists disks: the startup disk first, other drives below, mounted disk image
 
 ## Evidence on Hand
 
-App icon at `assets/icon.svg`; icon set in `assets/icons/`. No testimonials, benchmarks, or user counts exist; do not invent any.
+App icon masters in `assets/icon/` (a scanned burr, drawn by `script/icons/make_icons.py`); icon set in `assets/icons/`. No testimonials, benchmarks, or user counts exist; do not invent any.
 
 ## Product Principles
 
