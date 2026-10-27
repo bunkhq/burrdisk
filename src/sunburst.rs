@@ -4,10 +4,15 @@ use std::time::{Duration, Instant};
 
 use gpui::{Bounds, Hsla, PathBuilder, Pixels, Point, Window, point, px};
 
+use std::borrow::Cow;
+
+use crate::filetype::{Breakdown, Category};
 use crate::scan::{NodeId, NodeKind, Tree};
 
 /// Rings drawn beyond the center disc.
 pub const RINGS: usize = 5;
+/// Rings in the file type chart: type, extension, files.
+pub const TYPE_RINGS: usize = 3;
 /// Segments thinner than this (in turns) are folded into "smaller objects".
 const MIN_SPAN: f32 = 0.004;
 const CENTER_RATIO: f32 = 0.27;
@@ -20,6 +25,40 @@ pub enum Target {
     Node(NodeId),
     /// Aggregate of children too small to draw, keyed by their parent.
     Smaller(NodeId),
+    /// A file type or extension in the file type breakdown.
+    Group(u32),
+    /// Members of a breakdown group too small to draw.
+    GroupRest(u32),
+}
+
+/// What a folder's slices are sized by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Measure {
+    Size,
+    Count,
+}
+
+impl Measure {
+    pub fn of(self, tree: &Tree, id: NodeId) -> u64 {
+        let node = tree.node(id);
+        match self {
+            Measure::Size => node.size,
+            Measure::Count => node.items,
+        }
+    }
+
+    /// A folder's children, largest first by this measure.
+    fn children<'a>(self, tree: &'a Tree, id: NodeId) -> Cow<'a, [NodeId]> {
+        let children = &tree.node(id).children;
+        match self {
+            Measure::Size => Cow::Borrowed(children),
+            Measure::Count => {
+                let mut sorted = children.clone();
+                sorted.sort_by(|a, b| tree.node(*b).items.cmp(&tree.node(*a).items));
+                Cow::Owned(sorted)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -43,23 +82,25 @@ pub struct Geometry {
     pub center: Point<Pixels>,
     pub inner: f32,
     pub ring: f32,
+    pub rings: usize,
 }
 
 impl Geometry {
-    pub fn new(bounds: Bounds<Pixels>) -> Self {
+    pub fn new(bounds: Bounds<Pixels>, rings: usize) -> Self {
         let radius = (f32::from(bounds.size.width).min(f32::from(bounds.size.height)) / 2.0 - 12.0)
             .max(40.0);
         let inner = radius * CENTER_RATIO;
         Self {
             center: bounds.center(),
             inner,
-            ring: (radius - inner) / RINGS as f32,
+            ring: (radius - inner) / rings as f32,
+            rings,
         }
     }
 }
 
-pub fn layout(tree: &Tree, focus: NodeId) -> Vec<Segment> {
-    let mut cx = LayoutCx { tree, zoom: None, origin: hue_origin(tree, focus), out: Vec::new() };
+pub fn layout(tree: &Tree, focus: NodeId, measure: Measure) -> Vec<Segment> {
+    let mut cx = LayoutCx { tree, measure, zoom: None, origin: hue_origin(tree, focus, measure), out: Vec::new() };
     cx.lay_children(focus, 0, 0.0, 1.0, MIN_SPAN, false);
     cx.out
 }
@@ -79,7 +120,7 @@ pub struct Zoom {
 }
 
 impl Zoom {
-    pub fn new(tree: &Tree, from: NodeId, to: NodeId) -> Option<Self> {
+    pub fn new(tree: &Tree, from: NodeId, to: NodeId, measure: Measure) -> Option<Self> {
         let (base, inner, zoom_in) = if tree.is_ancestor(from, to) {
             (from, to, true)
         } else if tree.is_ancestor(to, from) {
@@ -96,8 +137,9 @@ impl Zoom {
         }
         let mut cx = LayoutCx {
             tree,
-            zoom: Some(ZoomCx { inner, path, extra: k, span: None, origin: hue_origin(tree, inner) }),
-            origin: hue_origin(tree, base),
+            measure,
+            zoom: Some(ZoomCx { inner, path, extra: k, span: None, origin: hue_origin(tree, inner, measure) }),
+            origin: hue_origin(tree, base, measure),
             out: Vec::new(),
         };
         cx.lay_children(base, 0, 0.0, 1.0, MIN_SPAN, false);
@@ -142,6 +184,7 @@ struct ZoomCx {
 
 struct LayoutCx<'a> {
     tree: &'a Tree,
+    measure: Measure,
     zoom: Option<ZoomCx>,
     origin: f32,
     out: Vec<Segment>,
@@ -152,18 +195,22 @@ impl LayoutCx<'_> {
     /// a finer fold threshold so it matches that folder's own layout exactly.
     fn lay_children(&mut self, parent: NodeId, depth: usize, start: f32, end: f32, min_span: f32, inside: bool) {
         let tree = self.tree;
-        let node = tree.node(parent);
+        let measure = self.measure;
+        let total = measure.of(tree, parent);
         let extra = self.zoom.as_ref().map_or(0, |z| z.extra);
-        if depth >= RINGS + extra || node.size == 0 {
+        if depth >= RINGS + extra || total == 0 {
             return;
         }
         let limit = if inside { RINGS + extra } else { RINGS };
         let span = end - start;
         let mut cursor = start;
         let mut rest = 0u64;
-        for &child in &node.children {
-            let size = tree.node(child).size;
-            let child_span = span * size as f32 / node.size as f32;
+        for &child in measure.children(tree, parent).iter() {
+            let size = measure.of(tree, child);
+            if size == 0 {
+                continue;
+            }
+            let child_span = span * size as f32 / total as f32;
             let on_path = self.zoom.as_ref().is_some_and(|z| z.path.contains(&child));
             if !on_path && (child_span < min_span || rest > 0) {
                 rest += size;
@@ -201,7 +248,7 @@ impl LayoutCx<'_> {
             }
             cursor += child_span;
         }
-        let rest_span = span * rest as f32 / node.size as f32;
+        let rest_span = span * rest as f32 / total as f32;
         if rest_span >= min_span / 2.0 && depth < limit {
             let color = smaller_color(depth);
             let alt = self.alt_color(inside, color, |_, _, k, _| smaller_color(depth.saturating_sub(k)));
@@ -230,11 +277,119 @@ fn smaller_color(depth: usize) -> Hsla {
 
 /// Puts the middle of a folder's largest child at the start of the hue wheel, so
 /// the biggest thing on screen always wears the brand orange.
-fn hue_origin(tree: &Tree, focus: NodeId) -> f32 {
-    let node = tree.node(focus);
-    match node.children.first() {
-        Some(&first) if node.size > 0 => tree.node(first).size as f32 / node.size as f32 / 2.0,
+fn hue_origin(tree: &Tree, focus: NodeId, measure: Measure) -> f32 {
+    let total = measure.of(tree, focus);
+    match measure.children(tree, focus).first() {
+        Some(&first) if total > 0 => measure.of(tree, first) as f32 / total as f32 / 2.0,
         _ => 0.0,
+    }
+}
+
+/// Each file type keeps one hue wherever it appears, so video always reads as video.
+fn category_hue(category: Category) -> f32 {
+    match category {
+        Category::Document | Category::Folder => 52.0,
+        Category::Archive => 88.0,
+        Category::Image => 150.0,
+        Category::Audio => 200.0,
+        Category::Program => 255.0,
+        Category::Video => 318.0,
+        Category::Other | Category::Hidden => 30.0,
+    }
+}
+
+/// The file type chart's colors: a category at full strength, its extensions fanned
+/// a little around the category's hue (`spread` -0.5..0.5), files quieter still.
+pub fn type_color(category: Category, depth: usize, spread: f32) -> Hsla {
+    if category == Category::Hidden {
+        return color_for(NodeKind::Hidden, 0.0, 0);
+    }
+    let muted = category == Category::Other;
+    let hue = category_hue(category) + spread * 36.0;
+    match depth {
+        0 => oklch(0.74, if muted { 0.05 } else { 0.15 }, hue),
+        1 => oklch(0.68, if muted { 0.04 } else { 0.125 }, hue),
+        _ => oklch(0.57, if muted { 0.03 } else { 0.06 }, hue),
+    }
+}
+
+/// The file type chart, opened at group `root`: from the whole folder that is
+/// categories, then their extensions, then the biggest items of each; from a
+/// category, its extensions and their items; from an extension, its items.
+pub fn layout_types(tree: &Tree, breakdown: &Breakdown, root: u32) -> Vec<Segment> {
+    let group = breakdown.group(root);
+    let hidden = (root == Breakdown::ROOT)
+        .then_some(breakdown.hidden)
+        .flatten()
+        .map(|id| (id, tree.node(id).size));
+    let total = group.size + hidden.map_or(0, |(_, size)| size);
+    let mut out = Vec::new();
+    if total == 0 {
+        return out;
+    }
+    let mut entries: Vec<(u64, Target)> = if group.groups.is_empty() {
+        group.files.iter().map(|f| (tree.node(*f).size, Target::Node(*f))).collect()
+    } else {
+        group.groups.iter().map(|g| (breakdown.group(*g).size, Target::Group(*g))).collect()
+    };
+    entries.extend(hidden.map(|(id, size)| (size, Target::Node(id))));
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    lay_type_entries(tree, breakdown, root, &entries, total, 0, 0.0, 1.0, &mut out);
+    out
+}
+
+/// Lays out one ring of the type chart between `start` and `end`, recursing into groups.
+#[allow(clippy::too_many_arguments)]
+fn lay_type_entries(
+    tree: &Tree,
+    breakdown: &Breakdown,
+    parent: u32,
+    entries: &[(u64, Target)],
+    total: u64,
+    depth: usize,
+    start: f32,
+    end: f32,
+    out: &mut Vec<Segment>,
+) {
+    let span = end - start;
+    let parent_group = breakdown.group(parent);
+    let mut cursor = start;
+    let mut rest = 0u64;
+    for &(size, target) in entries {
+        let child_span = span * size as f32 / total.max(1) as f32;
+        if child_span < MIN_SPAN || rest > 0 {
+            rest += size;
+            continue;
+        }
+        let (a, b) = (cursor, cursor + child_span);
+        let color = match target {
+            Target::Node(id) if tree.node(id).kind == NodeKind::Hidden => type_color(Category::Hidden, 0, 0.0),
+            Target::Node(_) => type_color(parent_group.category, 2, parent_group.spread),
+            Target::Group(g) => {
+                let group = breakdown.group(g);
+                type_color(group.category, breakdown.level(g), group.spread)
+            }
+            _ => smaller_color(depth),
+        };
+        out.push(Segment { target, depth, start: a, end: b, color, alt: color });
+        if let Target::Group(g) = target {
+            let group = breakdown.group(g);
+            let inner: Vec<(u64, Target)> = if group.groups.is_empty() {
+                group.files.iter().map(|f| (tree.node(*f).size, Target::Node(*f))).collect()
+            } else {
+                group.groups.iter().map(|c| (breakdown.group(*c).size, Target::Group(*c))).collect()
+            };
+            lay_type_entries(tree, breakdown, g, &inner, group.size, depth + 1, a, b, out);
+        }
+        cursor = b;
+    }
+    // Files beyond the biggest few kept per extension also land in "smaller".
+    let listed: u64 = entries.iter().map(|(size, _)| size).sum();
+    let rest = rest + total.saturating_sub(listed);
+    let rest_span = span * rest as f32 / total.max(1) as f32;
+    if rest_span >= MIN_SPAN / 2.0 {
+        let color = smaller_color(depth);
+        out.push(Segment { target: Target::GroupRest(parent), depth, start: cursor, end: cursor + rest_span, color, alt: color });
     }
 }
 
@@ -275,7 +430,7 @@ pub fn hit_test(segments: &[Segment], geometry: &Geometry, position: Point<Pixel
         return Some(Hit::Center);
     }
     let depth = ((r - geometry.inner) / geometry.ring) as usize;
-    if depth >= RINGS {
+    if depth >= geometry.rings {
         return None;
     }
     let turn = (dx.atan2(-dy) / TAU).rem_euclid(1.0);
@@ -320,10 +475,11 @@ pub struct PaintState {
     /// 0..1 hover glow on the center disc.
     pub center_hover: f32,
     pub center_tint: Hsla,
+    pub rings: usize,
 }
 
 pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, window: &mut Window) {
-    let geometry = Geometry::new(bounds);
+    let geometry = Geometry::new(bounds, state.rings);
     let view = state.view;
     let width = (view.hi - view.lo).max(1e-6);
 
@@ -344,7 +500,7 @@ pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, w
                 continue;
             }
             let rel = segment.depth as f32 - view.shift;
-            let fade = (1.0 + rel).clamp(0.0, 1.0) * (RINGS as f32 - rel).clamp(0.0, 1.0);
+            let fade = (1.0 + rel).clamp(0.0, 1.0) * (geometry.rings as f32 - rel).clamp(0.0, 1.0);
             // Rings sweep in clockwise, each a beat after the one inside it.
             let local = ease_out_cubic((view.reveal * 1.45 - segment.depth as f32 * 0.09).clamp(0.0, 1.0));
             if fade <= 0.0 || local <= 0.0 {
@@ -630,14 +786,14 @@ mod tests {
         let tree = scan::scan(&dir, "t", &Progress::default()).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
 
-        let segments = layout(&tree, Tree::ROOT);
+        let segments = layout(&tree, Tree::ROOT, Measure::Size);
         let ring0: Vec<_> = segments.iter().filter(|s| s.depth == 0).collect();
         assert_eq!(ring0.len(), 2);
         assert!(ring0[0].end > 0.6 && ring0[0].start == 0.0);
         assert!(segments.iter().any(|s| s.depth == 1));
 
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(400.)));
-        let geometry = Geometry::new(bounds);
+        let geometry = Geometry::new(bounds, RINGS);
         assert!(matches!(hit_test(&segments, &geometry, point(px(200.), px(200.))), Some(Hit::Center)));
         // Just right of 12 o'clock on the first ring is the largest child.
         let y = 200.0 - geometry.inner - geometry.ring / 2.0;
@@ -646,6 +802,45 @@ mod tests {
             _ => panic!("expected a segment"),
         }
         assert!(hit_test(&segments, &geometry, point(px(399.), px(1.))).is_none());
+    }
+
+    #[test]
+    fn count_and_type_layouts() {
+        let dir = std::env::temp_dir().join(format!("burrdisk-modes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("many")).unwrap();
+        for i in 0..20 {
+            std::fs::write(dir.join(format!("many/n{i}.txt")), vec![1u8; 10]).unwrap();
+        }
+        std::fs::write(dir.join("movie.mp4"), vec![1u8; 600_000]).unwrap();
+        std::fs::write(dir.join("song.mp3"), vec![1u8; 200_000]).unwrap();
+        let tree = scan::scan(&dir, "t", &Progress::default()).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // By size the movie leads; by file count the folder of twenty files does.
+        let by_size = layout(&tree, Tree::ROOT, Measure::Size);
+        let by_count = layout(&tree, Tree::ROOT, Measure::Count);
+        let first = |segs: &[Segment]| match segs.iter().find(|s| s.depth == 0).unwrap().target {
+            Target::Node(id) => tree.node(id).name.to_string(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(first(&by_size), "movie.mp4");
+        assert_eq!(first(&by_count), "many");
+
+        let breakdown = Breakdown::new(&tree, Tree::ROOT);
+        assert_eq!(breakdown.group(Breakdown::ROOT).count, 22);
+        let types = layout_types(&tree, &breakdown, Breakdown::ROOT);
+        let ring0: Vec<_> = types.iter().filter(|s| s.depth == 0).collect();
+        assert!(matches!(ring0[0].target, Target::Group(g) if breakdown.group(g).category == Category::Video));
+        assert!((ring0.last().unwrap().end - 1.0).abs() < 1e-3);
+        // The outer ring holds the real files, so they can be collected.
+        assert!(types.iter().any(|s| s.depth == 2 && matches!(s.target, Target::Node(_))));
+
+        // Opening the video type puts its extension on the first ring and the movie just outside.
+        let video = breakdown.find(Category::Video, None).unwrap();
+        let opened = layout_types(&tree, &breakdown, video);
+        assert!(matches!(opened[0].target, Target::Group(g) if breakdown.group(g).name == ".mp4"));
+        assert!(opened.iter().any(|s| s.depth == 1 && matches!(s.target, Target::Node(id) if &*tree.node(id).name == "movie.mp4")));
     }
 
     /// At the end of a zoom, the descendant's subtree must land exactly where its own
@@ -664,8 +859,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
 
         let big = tree.node(Tree::ROOT).children.iter().copied().find(|c| &*tree.node(*c).name == "big").unwrap();
-        let zoom = Zoom::new(&tree, Tree::ROOT, big).unwrap();
-        let target = layout(&tree, big);
+        let zoom = Zoom::new(&tree, Tree::ROOT, big, Measure::Size).unwrap();
+        let target = layout(&tree, big, Measure::Size);
         let (a, b) = (zoom.a, zoom.b);
         for seg in target.iter() {
             let found = zoom
@@ -679,6 +874,6 @@ mod tests {
             assert!((found.alt.h - seg.color.h).abs() < 1e-3 && (found.alt.l - seg.color.l).abs() < 1e-3);
         }
         // Zooming back out is the same move in reverse.
-        assert!(Zoom::new(&tree, big, Tree::ROOT).is_some());
+        assert!(Zoom::new(&tree, big, Tree::ROOT, Measure::Size).is_some());
     }
 }

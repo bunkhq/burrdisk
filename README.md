@@ -15,6 +15,8 @@ Download from [Releases](https://github.com/bunkhq/burrdisk/releases):
 - **macOS:** open `Burrdisk-<version>-arm64.dmg` and drag Burrdisk to Applications. It's signed ad hoc rather than notarized, so the first launch needs right-click > Open (or System Settings > Privacy & Security > Open Anyway). Apple silicon only for now.
 - **Windows:** run `Burrdisk-<version>-windows-x64-setup.exe`. It installs for your user without an administrator prompt (or for everyone, if you choose), adds Burrdisk to the Start menu and can be removed from Settings > Apps. It isn't code signed, so SmartScreen may ask first (More info > Run anyway).
 
+After that, Burrdisk updates itself. It checks GitHub Releases a few seconds after launch and every six hours (on macOS, also from **Burrdisk > Check for Updates…**). When a new version is out, an Update button appears in the title bar. **Update and Restart** downloads it, checks it against the SHA-256 digest GitHub records for the file, installs it and reopens Burrdisk. On macOS the new app replaces the old one in place. Because the app is signed ad hoc, Full Disk Access has to be turned on again after each update. On Windows the new installer runs silently over the existing install.
+
 ## Build
 
 Requires Rust 1.88+ and Xcode with the Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`).
@@ -25,6 +27,8 @@ cargo run --release -- ~/Library # scan a folder directly
 ```
 
 For development with Full Disk Access, use `script/dev-app.sh` instead. It builds a `Burrdisk Dev.app` signed with a local certificate (created once in your login keychain), so the Full Disk Access grant survives rebuilds. Run `script/dev-app.sh --grant` the first time and add the app in System Settings.
+
+Builds that aren't installed (`cargo run`, `Burrdisk Dev.app`) don't look for updates. To try the updater, point a bundled `Burrdisk.app` at a release JSON of your own, in the shape of GitHub's `releases/latest` API: `BURRDISK_UPDATE_FEED=http://127.0.0.1:8000/release.json Burrdisk.app/Contents/MacOS/burrdisk`.
 
 `script/bundle.sh` builds the release `Burrdisk.app` and packs it into a disk image and a zip in `dist/`.
 

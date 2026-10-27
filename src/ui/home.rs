@@ -22,7 +22,7 @@ const IMAGE_ROW: f32 = 40.0;
 const IMAGE_GAP: f32 = 4.0;
 
 /// Fades and lifts a section into place, `order` beats after the page appears.
-fn rise(el: impl IntoElement, id: impl Into<ElementId>, order: usize) -> AnyElement {
+pub fn rise(el: impl IntoElement, id: impl Into<ElementId>, order: usize) -> AnyElement {
     let delay = order as f32 * 0.08;
     let total = delay + 0.5;
     div()
@@ -96,6 +96,20 @@ fn spines(volume: &Volume, known: &Known, count: usize) -> Vec<Spine> {
         .collect()
 }
 
+/// A disk's burr as it looks before a scan: lit spines for the space in use.
+pub fn fill_burr(id: impl Into<ElementId>, volume: &Volume, size: f32, count: usize, grow: f32) -> impl IntoElement {
+    let known = Known { scanned: None, admin: false, lobes: Vec::new() };
+    let spines = spines(volume, &known, count);
+    let core = gpui::hsla(0.07, 0.14, 0.13, 1.0);
+    div().id(id).flex_none().size(px(size)).child(
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| sunburst::paint_burr(window, bounds, &spines, core, None, grow, 0.0),
+        )
+        .size_full(),
+    )
+}
+
 fn burr(
     id: impl Into<ElementId>,
     volume: &Volume,
@@ -119,6 +133,7 @@ fn burr(
 
 pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let grow = (app.home_since.elapsed().as_secs_f32() / GROW.as_secs_f32()).min(1.0);
+    let update = crate::ui::update::button_and_card(app, window, cx);
     if grow < 1.0 {
         window.request_animation_frame();
     }
@@ -177,7 +192,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         .flex()
         .flex_col()
         .size_full()
-        .child(titlebar(grow, window, cx))
+        .child(titlebar(grow, update, window, cx))
         .child(
             div()
                 .id("home-scroll")
@@ -199,7 +214,7 @@ fn heading(text: &'static str, count: Option<usize>) -> impl IntoElement {
         .when_some(count, |s, n| s.child(div().text_sm().text_color(theme::text_faint()).child(n.to_string())))
 }
 
-fn titlebar(grow: f32, window: &Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+fn titlebar(grow: f32, update: Option<AnyElement>, window: &Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     // The wordmark's own little burr, all brand orange.
     let mark: Vec<Spine> = (0..14)
         .map(|i| Spine { at: i as f32 / 14.0, len: 0.95, color: theme::accent().into() })
@@ -246,6 +261,7 @@ fn titlebar(grow: f32, window: &Window, cx: &mut Context<Burrdisk>) -> impl Into
                 .items_center()
                 .h_full()
                 .gap(px(12.))
+                .children(update)
                 .child(
                     icon_label_button(
                         "scan-folder",
@@ -276,15 +292,17 @@ fn disk_menu(app: &Burrdisk, volume: &Volume, known: &Known, window: &Window, cx
     };
     let mount = volume.mount.clone();
     let info = volume.mount.clone();
+    // A disk that hasn't been scanned yet gets scanned, not rescanned.
+    let verb = if known.scanned.is_some() { "Rescan" } else { "Scan" };
     let items = vec![
-        MenuItem::new("Rescan", act(|this, v, cx| {
+        MenuItem::new(verb, act(|this, v, cx| {
             let admin = this.scanned_as_admin(&v.mount);
             this.rescan_volume(v, admin, cx)
         })),
         if known.admin {
-            MenuItem::new("Rescan as Normal User", act(|this, v, cx| this.rescan_volume(v, false, cx)))
+            MenuItem::new(format!("{verb} as Normal User"), act(|this, v, cx| this.rescan_volume(v, false, cx)))
         } else {
-            MenuItem::new("Rescan as Administrator", act(|this, v, cx| this.rescan_volume(v, true, cx)))
+            MenuItem::new(format!("{verb} as Administrator"), act(|this, v, cx| this.rescan_volume(v, true, cx)))
         },
         MenuItem::separator(),
         MenuItem::new("Forget Scan Result", act(|this, v, cx| this.forget_scan(&v.mount, cx)))
@@ -431,7 +449,44 @@ fn lead(
                         .when_some(known.scanned, |s, at| {
                             s.child(div().text_xs().text_color(theme::accent_hi()).whitespace_nowrap().child(ago(at, known.admin)))
                         }),
-                ),
+                )
+                .when(!app.full_disk_access && volumes::needs_full_disk_access(&volume.mount), |s| {
+                    s.child(access_notice())
+                }),
+        )
+}
+
+/// One line under the startup disk while macOS keeps protected folders from the scan.
+fn access_notice() -> impl IntoElement {
+    let t = fx::hover("access-link");
+    div()
+        .flex()
+        .items_center()
+        .gap_2()
+        .mt(px(10.))
+        .text_sm()
+        .child(icon(Icon::ShieldAlert, 15.0, theme::accent_hi()))
+        .child(
+            div()
+                .text_color(theme::text_muted())
+                .whitespace_nowrap()
+                .truncate()
+                .min_w_0()
+                .child("Full Disk Access is off, so part of this disk will be hidden."),
+        )
+        .child(
+            div()
+                .id("access-link")
+                .flex_none()
+                .px_1p5()
+                .rounded(px(6.))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(fx::mix(theme::accent_hi(), theme::accent(), t))
+                .bg(fx::mix(gpui::transparent_black(), theme::accent_soft(), t))
+                .cursor_pointer()
+                .on_hover(fx::on_hover("access-link"))
+                .on_click(|_, _, cx| cx.open_url(volumes::FULL_DISK_ACCESS_SETTINGS))
+                .child("Turn On\u{2026}"),
         )
 }
 

@@ -133,6 +133,16 @@ components:
     textColor: "{colors.text}"
     rounded: "{rounded.row}"
     height: "50px"
+  sidebar-row-compact:
+    backgroundColor: "transparent"
+    textColor: "{colors.text-muted}"
+    rounded: "{rounded.sm}"
+    height: "26px"
+  mode-switch-segment-on:
+    backgroundColor: "{colors.ember-soft}"
+    textColor: "{colors.ember-hi}"
+    rounded: "7px"
+    height: "24px"
   tray-chip:
     backgroundColor: "{colors.graphite-raised}"
     textColor: "{colors.text}"
@@ -181,6 +191,7 @@ A graphite ground with one warm brand voice (orange), one alarm voice (red), and
 - **Data Wheel** (`data-dir-root`, `data-file-root`): folder and file colors come from `color_for`. Hue = 52° + position × 300°, so it runs around the circle. Folders start at L 0.74 / C 0.15, and files are quieter at L 0.58 / C 0.055. Each ring deeper drops lightness (0.045 for folders, 0.03 for files) and chroma (0.014 for folders, 0.006 for files). The wheel is rotated so that the middle of the largest child sits at the start hue. The palette is a product commitment and stays.
 - **Hidden Violet** (`data-hidden`): space the scan cannot see.
 - **Smaller Dust** (`data-smaller`): the "smaller items" remainder, which gets slightly darker with each ring deeper.
+- **Type Hues**: in the File Types chart each category keeps one hue on the same OKLCH ramp (L 0.74 / C 0.15 for the category, 0.68 / 0.125 for its extensions fanned ±18° around it, 0.57 / 0.06 for files): Documents 52°, Archives 88°, Images 150°, Audio 200°, Programs 255°, Video 318°. Other files stay near-grey (C 0.05). This is the one chart where hue means kind rather than position, so The Biggest Is Orange Rule does not apply there.
 - **Fullness** (`fullness-calm` → `fullness-warn` → `fullness-full`): the lit spines of an unscanned burr. The color is HSL with S 0.70 and L 0.56. It stays green below 70% full, sweeps through yellow-green to red-orange between 70% and 90%, and is red-orange above 90%.
 
 ### Neutral
@@ -269,8 +280,24 @@ Tactile and lit, like small backlit keys.
 - Enter: a 140ms fade with a 6px→4px settle (ease-out quint).
 
 ### Sidebar Rows
-- 50px tall with 11px corners. A 32px data-colored tile (9px corners, color at 16–30%, with the icon in the color lightened +0.12 L) sits beside the name (14px medium) and a 3px share bar in the data color over `track`.
-- Hover tints the whole row with a horizontal gradient of its data color (16%→3%) and a 28% border, and lifts the tile with a colored glow. Collected rows dim to 40%.
+- 50px tall with 11px corners. An 18px icon with no tile, in the row's chart color lightened +0.10 L (+0.08 more on hover), sits beside the name (14px medium) and a 3px share bar in the data color over `track`.
+- The icon's shape says what the item is: folder, archive, video, program (apps and other packages), audio, image, document, or plain file; Hidden space gets the disc. The color always matches the item's slice in the chart.
+- **Compact rows:** items under 0.1% of the list collapse to 26px lines with 8px corners: a 13px icon, a 13px regular muted name, the figure in 12px faint, no bar or percent.
+- Hover tints the whole row with a horizontal gradient of its data color (16%→3%) and a 28% border. Collected rows dim to 40%.
+
+### Chart Modes
+- A segmented switch in the explorer titlebar, left of Rescan: **Size**, **File Count**, **File Types**. A 2px-padded Graphite Ground well with a hairline border and 9px corners; segments are 24px tall with 7px corners and 13px labels. The active segment wears the current-crumb style (Ember Soft fill, Ember Hi semibold text, Ember 22% border); the others ease from muted to a Raised fill on hover.
+- **Size:** slices by bytes on disk. **File Count:** slices and rows by files inside (folders themselves don't count); figures read "1,234 files" and the header leads with the count. **File Types:** three thicker rings over everything inside the focus folder: category, extension, then the biggest real items of each (apps count as one item). The sidebar lists every extension with its type faintly after the name; hovering a type in the chart lists its extensions, hovering an extension lists its files. Types and extensions open like folders (chart slice, sidebar row, or crumb): the path continues past the folder ("Downloads › Video › .mp4"), the chart redraws with fewer, thicker rings (never fewer than two ring widths), and the center, Back, Esc and the mouse's back button step out one level. An opened extension lists up to 200 of its biggest items, which can be collected, dragged and right-clicked.
+
+### Full Disk Access
+- Scanning the startup disk or a folder above the home folder without Full Disk Access first opens a step screen: the disk's unscanned burr (180px) beside a 26px bold heading, one muted paragraph, three numbered steps in 22px hairline circles, then Open System Settings (primary) and Scan Without Access (ghost). Once access is detected on window activation, the actions become a single Scan button and an Ember Hi shield line confirms it.
+- On home, a single line under the startup disk's buttons (shield icon, muted sentence, an Ember Hi "Turn On…" link) stays until access is granted. In the explorer, an Ember Soft panel with a 22% Ember border tops the disk's root list.
+
+### Updates
+- **Update button:** in the home and explorer titlebars (left of Scan Folder… and of the chart modes), only while there is something to say. 28px tall, 9px corners, 13px semibold, ghost-like (muted, easing to Graphite Hover and text on hover; Raised with a hairline while its card is open). A 7px status dot leads: Ember with a soft Ember halo while an update is available or installing, faint grey after a failure. Labels: "Update to 0.3.0", "Downloading… 42%", "Installing…", "Update didn't finish"; after a check from the macOS app menu, a faint, unclickable "Checking for updates…" and then a check mark with "Burrdisk is up to date" for 4 seconds. It fades in over 420ms.
+- **Update card:** opens below the button, right-aligned, 328px wide: Menu Ground, 14px corners, white 12% hairline, a slightly deeper Float shadow (14px / 36px). It enters with a 220ms fade and an 8px settle. Inside, 16px padding and 14px gaps: a 30px Ember Soft well with the download icon in Ember Hi beside the 16px semibold "Burrdisk 0.3.0" and a faint "You have 0.2.0 · 4.7 MB download"; the release notes' first paragraph in 13px muted; a "What's New ↗" link styled like home's Turn On…; then faint-iconed 12px cautions that say what restarting costs (scans need to run again; on macOS, Full Disk Access must be turned on again, because the ad hoc signature changes); then Later (ghost) and Update and Restart (primary). Downloading swaps the buttons for a 6px Ember bar on `track` with its own soft glow, "Downloading 2.1 of 4.7 MB" and Cancel; installing fills the bar and says Burrdisk will reopen.
+- **When it opens by itself:** once per new version, and only on the disk list. Found while scanning or exploring, the button appears without the card. Clicking outside the card puts it away like Later.
+- **Errors** are neutral, never Trash Red: the reason as a muted sentence beside a faint X, with Try Again (primary) and Download Manually (ghost). A copy that can't replace itself (macOS App Translocation, a folder it can't write to, a Windows copy not installed by the installer) says why and offers Download, which opens the release page.
 
 ### Collection Tray
 - An 80px bar. When empty, it shows a 48px dashed badge with the inbox icon and two lines of muted and faint guidance. Once items are collected, it shows an orange count badge with a glow that flares when the count changes, the total as an amount, a horizontally scrolling row of chips, and Move to Trash.
