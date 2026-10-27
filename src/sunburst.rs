@@ -366,7 +366,10 @@ pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, w
             let mut alpha = fade * (0.35 + 0.65 * local);
             alpha *= 1.0 - 0.5 * state.dim * (1.0 - highlight);
             if state.collected.get(ix).copied().unwrap_or(false) {
-                alpha *= 0.2;
+                // Collected items drain to gray, so the chart shows what's leaving.
+                color.s *= 0.12;
+                color.l *= 0.85;
+                alpha *= 0.35;
             }
             color.a = alpha;
 
@@ -474,30 +477,6 @@ fn dot(window: &mut Window, center: Point<Pixels>, r: f32, turn: f32, radius: f3
     ribbon(window, c, 0.0, radius, 0.0, 1.0, |_| color);
 }
 
-/// A thick ring showing how full a volume is, with rounded ends and a soft glow.
-pub fn paint_gauge(window: &mut Window, bounds: Bounds<Pixels>, ratio: f32, thickness: f32, fill: Hsla, track: Hsla) {
-    let center = bounds.center();
-    let r1 = f32::from(bounds.size.width.min(bounds.size.height)) / 2.0 - 6.0;
-    let r0 = r1 - thickness;
-    let mid = (r0 + r1) / 2.0;
-    ribbon(window, center, r0, r1, 0.0, 1.0, |_| track);
-    let ratio = ratio.min(1.0);
-    if ratio <= 0.0 {
-        return;
-    }
-    let mut glow = fill;
-    glow.a = 0.16;
-    ribbon(window, center, r0 - 4.0, r1 + 4.0, 0.0, ratio, |_| glow);
-    let shade = |u: f32| {
-        let mut c = fill;
-        c.l = (fill.l - 0.10 + 0.14 * u).clamp(0.0, 1.0);
-        c
-    };
-    ribbon(window, center, r0, r1, 0.0, ratio, shade);
-    dot(window, center, mid, 0.0, thickness / 2.0, shade(0.0));
-    dot(window, center, mid, ratio, thickness / 2.0, shade(1.0));
-}
-
 /// A ring track with a highlighted arc from `start` to `end` (in turns). With
 /// `tail`, the arc fades in from transparent like a comet.
 pub fn paint_arc(window: &mut Window, bounds: Bounds<Pixels>, start: f32, end: f32, thickness: f32, fill: Hsla, track: Hsla, tail: bool) {
@@ -526,6 +505,79 @@ pub fn paint_arc(window: &mut Window, bounds: Bounds<Pixels>, start: f32, end: f
         dot(window, center, mid, start, thickness / 2.0, color_at(0.0));
     }
     dot(window, center, mid, end, thickness / 2.0, color_at(1.0));
+}
+
+/// One spine of a burr: a tapered spike standing out from the seed core.
+#[derive(Clone, Copy, Debug)]
+pub struct Spine {
+    /// Angle of the spine's axis, in turns clockwise from 12 o'clock.
+    pub at: f32,
+    /// Length as a fraction of the room between the core and the edge.
+    pub len: f32,
+    pub color: Hsla,
+}
+
+/// Paints a burr: a round seed core with spines radiating out of it. `grow` (0..1)
+/// draws the spines out from the core, sweeping clockwise; `bristle` stretches them.
+pub fn paint_burr(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    spines: &[Spine],
+    core: Hsla,
+    rim: Option<Hsla>,
+    grow: f32,
+    bristle: f32,
+) {
+    let center = bounds.center();
+    let radius = f32::from(bounds.size.width.min(bounds.size.height)) / 2.0;
+    let r0 = radius * 0.34;
+    let room = radius - r0 - 2.0;
+    let at = |r: f32, turn: f32| {
+        let a = turn * TAU;
+        point(center.x + px(r * a.sin()), center.y - px(r * a.cos()))
+    };
+    // Bases are a share of the gap between neighbors, so busy burrs stay crisp.
+    let base_turns = (0.55 / spines.len().max(12) as f32).min(0.03);
+    let base_half = (base_turns * TAU * r0 / 2.0).clamp(0.9, 4.0);
+    for spine in spines {
+        let local = ((grow * 1.35 - spine.at * 0.35) / 1.0).clamp(0.0, 1.0);
+        let local = ease_out_cubic(local);
+        let len = room * spine.len * local * (1.0 + 0.07 * bristle);
+        if len < 1.0 {
+            continue;
+        }
+        let a = spine.at * TAU;
+        let (dir_x, dir_y) = (a.sin(), -a.cos());
+        let (n_x, n_y) = (-dir_y, dir_x);
+        // Start inside the core so the spine looks rooted, not glued on.
+        let root = r0 - 2.0;
+        let tip = r0 + len;
+        let tip_half = 0.45;
+        let p = |r: f32, side: f32| {
+            point(
+                center.x + px(r * dir_x + side * n_x),
+                center.y + px(r * dir_y + side * n_y),
+            )
+        };
+        let mut builder = PathBuilder::fill();
+        builder.move_to(p(root, -base_half));
+        builder.line_to(p(tip, -tip_half));
+        builder.line_to(p(tip, tip_half));
+        builder.line_to(p(root, base_half));
+        builder.close();
+        if let Ok(path) = builder.build() {
+            window.paint_path(path, spine.color);
+        }
+        // A small bead at the tip, the burr's hook.
+        let hook = (base_half * 0.75).clamp(0.9, 2.2);
+        let mut bead = spine.color;
+        bead.l = (bead.l + 0.08).min(0.95);
+        ribbon(window, at(tip, spine.at), 0.0, hook, 0.0, 1.0, |_| bead);
+    }
+    ribbon(window, center, 0.0, r0, 0.0, 1.0, |_| core);
+    if let Some(rim) = rim {
+        ribbon(window, center, r0 - 1.5, r0, 0.0, 1.0, |_| rim);
+    }
 }
 
 pub fn lerp_hsla(a: Hsla, b: Hsla, t: f32) -> Hsla {

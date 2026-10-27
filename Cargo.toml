@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A fast, friendly disk space visualizer"
 license = "MIT"
-repository = "https://github.com/trelakor/burrdisk"
+repository = "https://github.com/bunkhq/burrdisk"
 
 [dependencies]
 anyhow = "1"
