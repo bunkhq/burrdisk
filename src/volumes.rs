@@ -162,7 +162,7 @@ fn disk_image_mounts() -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// Opens Finder's Get Info window for `path`.
+/// Opens Finder's Get Info window for `path`, or its Properties dialog on Windows.
 pub fn get_info(path: &Path) {
     #[cfg(target_os = "macos")]
     {
@@ -184,6 +184,8 @@ pub fn get_info(path: &Path) {
             .arg(path)
             .spawn();
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    crate::platform::shell_execute("properties", path, None, false);
+    #[cfg(not(any(target_os = "macos", windows)))]
     let _ = path;
 }

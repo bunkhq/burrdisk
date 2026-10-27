@@ -1,0 +1,69 @@
+# Builds Burrdisk for macOS and Windows on a version tag and attaches the
+# disk image and the installer to a draft release, to be reviewed and published.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Newer Xcode ships the Metal compiler as a separate component.
+      - name: Metal toolchain
+        run: xcodebuild -downloadComponent MetalToolchain || true
+      - name: Build Burrdisk.app and disk image
+        run: sh script/bundle.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+      - name: Build Burrdisk.exe and installer
+        shell: pwsh
+        run: ./script/bundle.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*-setup.exe
+          if-no-files-found: error
+
+  release:
+    needs: [macos, windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --draft \
+            --title "Burrdisk ${TAG#v}" --notes "Release notes to follow."

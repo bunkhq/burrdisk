@@ -1,8 +1,9 @@
 use gpui::{
     AnyElement, App, BoxShadow, ClickEvent, Div, ElementId, Hsla, IntoElement, Rgba, SharedString,
-    Stateful, Svg, Window, div, linear_color_stop, linear_gradient, point, prelude::*, px, rgb,
+    Stateful, Svg, Window, WindowControlArea, div, linear_color_stop, linear_gradient, point, prelude::*, rgb,
     rgba, svg,
 };
+use crate::ui::px;
 
 use std::time::Duration;
 
@@ -31,6 +32,10 @@ pub enum Icon {
     Scan,
     Trash,
     Usb,
+    WindowClose,
+    WindowMaximize,
+    WindowMinimize,
+    WindowRestore,
     X,
 }
 
@@ -55,6 +60,10 @@ impl Icon {
             Icon::Scan => "icons/scan.svg",
             Icon::Trash => "icons/trash.svg",
             Icon::Usb => "icons/usb.svg",
+            Icon::WindowClose => "icons/window-close.svg",
+            Icon::WindowMaximize => "icons/window-maximize.svg",
+            Icon::WindowMinimize => "icons/window-minimize.svg",
+            Icon::WindowRestore => "icons/window-restore.svg",
             Icon::X => "icons/x.svg",
         }
     }
@@ -217,6 +226,50 @@ pub fn icon_button(
                 .size(px(15.))
                 .text_color(fx::mix(theme::text_muted(), theme::text(), t)),
         )
+}
+
+/// Minimize, maximize and close, drawn at the right end of a title bar on Windows,
+/// where Burrdisk draws its own title bar. The system handles the clicks (and shows
+/// Snap Layouts over maximize); these only paint. Empty on macOS, which keeps its
+/// traffic lights.
+pub fn window_controls(window: &Window) -> AnyElement {
+    if !cfg!(windows) {
+        return div().into_any_element();
+    }
+    let active = window.is_window_active();
+    let maximize = if window.is_maximized() { Icon::WindowRestore } else { Icon::WindowMaximize };
+    let button = |id: &'static str, glyph: Icon, area: WindowControlArea| {
+        let t = fx::hover(id);
+        let close = area == WindowControlArea::Close;
+        let (fill, ink) = if close {
+            (Hsla::from(rgb(0xc42b1c)), Hsla::from(rgb(0xffffff)))
+        } else {
+            (Hsla::from(rgba(0xffffff0f)), theme::text().into())
+        };
+        let rest = if active { theme::text_muted() } else { theme::text_faint() };
+        div()
+            .id(id)
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .w(px(46.))
+            .h_full()
+            .occlude()
+            .window_control_area(area)
+            .bg(fx::mix(gpui::transparent_black(), fill, t))
+            .active(move |s| s.bg(fill.opacity(if close { 0.8 } else { 0.6 })))
+            .on_hover(fx::on_hover(id))
+            .child(icon(glyph, 10.0, fx::mix(rest, ink, t)))
+    };
+    div()
+        .flex()
+        .flex_none()
+        .h_full()
+        .child(button("window-min", Icon::WindowMinimize, WindowControlArea::Min))
+        .child(button("window-max", maximize, WindowControlArea::Max))
+        .child(button("window-close", Icon::WindowClose, WindowControlArea::Close))
+        .into_any_element()
 }
 
 /// A number with a smaller unit after it ("38.0 GB"), sharing one baseline.

@@ -156,8 +156,11 @@ struct Entry {
 }
 
 struct Walker<'a> {
+    // Device and hard link checks need inode numbers, which only Unix exposes.
+    #[cfg_attr(not(unix), allow(dead_code))]
     devices: Vec<u64>,
     skip: Vec<PathBuf>,
+    #[cfg_attr(not(unix), allow(dead_code))]
     hard_links: Mutex<HashSet<(u64, u64)>>,
     progress: &'a Progress,
 }
@@ -217,7 +220,7 @@ impl Walker<'_> {
                 }
                 subdirs.push((path, name, allocated(&meta)));
             } else {
-                let size = if self.first_link(&meta) { allocated(&meta) } else { 0 };
+                let size = if self.first_link(&meta) { file_allocated(&meta, &item) } else { 0 };
                 bytes += size;
                 entries.push(Entry {
                     name,
@@ -291,6 +294,39 @@ fn allocated(meta: &fs::Metadata) -> u64 {
 #[cfg(not(unix))]
 fn allocated(meta: &fs::Metadata) -> u64 {
     meta.len()
+}
+
+#[cfg(not(windows))]
+fn file_allocated(meta: &fs::Metadata, _item: &fs::DirEntry) -> u64 {
+    allocated(meta)
+}
+
+/// A file's size on disk. Most files take their length; cloud placeholders (OneDrive
+/// files kept online only), compressed and sparse files ask NTFS what they really use.
+#[cfg(windows)]
+fn file_allocated(meta: &fs::Metadata, item: &fs::DirEntry) -> u64 {
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_COMPRESSED, FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
+        FILE_ATTRIBUTE_RECALL_ON_OPEN, FILE_ATTRIBUTE_SPARSE_FILE, GetCompressedFileSizeW,
+        INVALID_FILE_SIZE,
+    };
+    const SPECIAL: u32 = FILE_ATTRIBUTE_COMPRESSED
+        | FILE_ATTRIBUTE_OFFLINE
+        | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+        | FILE_ATTRIBUTE_RECALL_ON_OPEN
+        | FILE_ATTRIBUTE_SPARSE_FILE;
+    if meta.file_attributes() & SPECIAL == 0 {
+        return meta.len();
+    }
+    let path: Vec<u16> = item.path().as_os_str().encode_wide().chain(Some(0)).collect();
+    let mut high = 0u32;
+    let low = unsafe { GetCompressedFileSizeW(path.as_ptr(), &mut high) };
+    if low == INVALID_FILE_SIZE && std::io::Error::last_os_error().raw_os_error() != Some(0) {
+        return meta.len();
+    }
+    (u64::from(high) << 32) | u64::from(low)
 }
 
 /// Devices the scan may enter. On macOS the startup disk is split into a read-only
@@ -435,7 +471,64 @@ pub fn scan_as_admin(root: &Path, display_name: &str, files: &HelperFiles) -> Op
     tree
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Scans `root` elevated. Windows shows its UAC prompt, then runs this same executable
+/// in helper mode; `None` if that was refused or cancelled.
+#[cfg(windows)]
+pub fn scan_as_admin(root: &Path, display_name: &str, files: &HelperFiles) -> Option<Tree> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
+
+    let exe = std::env::current_exe().ok()?;
+    let base = files.tree.with_extension("");
+    let mut params = std::ffi::OsString::from("--scan-helper");
+    for arg in [base.as_os_str(), root.as_os_str(), display_name.as_ref()] {
+        params.push(" ");
+        params.push(quote_arg(arg));
+    }
+    let process = crate::platform::shell_execute("runas", &exe, Some(&params), true)?;
+    let mut code = 1;
+    unsafe {
+        WaitForSingleObject(process, INFINITE);
+        GetExitCodeProcess(process, &mut code);
+        CloseHandle(process);
+    }
+    let tree = (code == 0)
+        .then(|| fs::File::open(&files.tree).ok())
+        .flatten()
+        .and_then(|file| Tree::read(std::io::BufReader::new(file), root.to_path_buf()).ok());
+    files.remove();
+    tree
+}
+
+/// Quotes one argument the way `CommandLineToArgvW` (and Rust's `args_os`) splits them:
+/// backslashes are literal except right before a quote, where they escape in pairs.
+#[cfg(windows)]
+fn quote_arg(arg: &std::ffi::OsStr) -> std::ffi::OsString {
+    let arg = arg.to_string_lossy();
+    let mut out = String::from('"');
+    let mut backslashes = 0;
+    for c in arg.chars() {
+        match c {
+            '\\' => backslashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                backslashes = 0;
+            }
+            _ => {
+                out.extend(std::iter::repeat_n('\\', backslashes));
+                backslashes = 0;
+            }
+        }
+        if c != '\\' {
+            out.push(c);
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', backslashes * 2));
+    out.push('"');
+    out.into()
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 pub fn scan_as_admin(root: &Path, display_name: &str, _files: &HelperFiles) -> Option<Tree> {
     scan(root, display_name, &Progress::default())
 }
@@ -558,6 +651,16 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn quotes_helper_args() {
+        let quote = |s: &str| quote_arg(s.as_ref()).into_string().unwrap();
+        assert_eq!(quote(r"C:\"), r#""C:\\""#);
+        assert_eq!(quote(r"C:\Program Files\x"), r#""C:\Program Files\x""#);
+        assert_eq!(quote(r#"say "hi"\"#), r#""say \"hi\"\\""#);
+        assert_eq!(quote(r#"a\"b"#), r#""a\\\"b""#);
+    }
 
     #[test]
     fn scans_and_removes() {
