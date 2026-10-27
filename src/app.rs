@@ -6,16 +6,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Bounds, Context, FocusHandle, PathPromptOptions, Pixels, Point, Render, SharedString, Task,
-    Window, actions, div, prelude::*,
+    Bounds, Context, FocusHandle, MouseButton, NavigationDirection, PathPromptOptions, Pixels, Point,
+    Render, SharedString, Subscription, Task, Window, actions, div, prelude::*,
 };
 
+use crate::filetype::Breakdown;
 use crate::scan::{self, NodeId, NodeKind, Progress, Tree};
-use crate::sunburst::{self, Segment, Target, Zoom};
+use crate::sunburst::{self, Measure, Segment, Target, Zoom};
 use crate::theme;
+use crate::update::{self, Release};
 use crate::volumes::{self, Volume};
 
-actions!(burrdisk, [GoUp, GoBack, GoForward, Preview, Collect, Quit]);
+actions!(burrdisk, [GoUp, GoBack, GoForward, Preview, Collect, Quit, CheckForUpdates]);
 
 #[derive(Clone)]
 pub struct ScanTarget {
@@ -29,8 +31,49 @@ pub struct ScanTarget {
 
 pub enum Screen {
     Home,
+    /// Asks for Full Disk Access before a scan that would otherwise miss protected folders.
+    Access(ScanTarget),
     Scanning(Scanning),
     Explorer(Explorer),
+}
+
+/// How the chart divides the folder in focus.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ChartMode {
+    /// Folders and files sized by the space they take.
+    Size,
+    /// Folders and files sized by how many files they hold.
+    Count,
+    /// Everything inside, grouped by file type and extension.
+    Types,
+}
+
+/// Where an update stands.
+pub enum UpdatePhase {
+    Idle,
+    /// A check the user asked for, from the app menu.
+    Checking,
+    /// A check the user asked for found nothing newer; shown briefly.
+    UpToDate(Instant),
+    Available,
+    Downloading(Arc<update::Progress>),
+    /// Unpacking and swapping in the new version, just before the restart.
+    Installing,
+    Failed(String),
+}
+
+pub struct Updater {
+    pub phase: UpdatePhase,
+    /// The newer release, once one is found.
+    pub release: Option<Release>,
+    /// Whether the update card is open below the titlebar's Update button.
+    pub open: bool,
+    /// The version the card last opened for by itself, so it does so once.
+    prompted: Option<update::Version>,
+    /// When the Update button appeared, for its entrance.
+    pub since: Instant,
+    _checks: Option<Task<()>>,
+    _job: Option<Task<()>>,
 }
 
 pub struct Scanning {
@@ -86,6 +129,13 @@ pub struct Explorer {
     pub countdown: Option<Instant>,
     pub trashing: bool,
     pub notice: Option<Notice>,
+    pub mode: ChartMode,
+    /// The focus folder grouped by file type, while the chart shows types.
+    pub breakdown: Option<Rc<Breakdown>>,
+    /// Type or extension the sidebar shows while the type chart is hovered.
+    pub group_preview: Option<u32>,
+    /// Type or extension the type chart is opened into, like a folder.
+    pub group_focus: Option<u32>,
 }
 
 /// A short message shown above the tray, e.g. the result of moving items to the Trash.
@@ -134,8 +184,19 @@ pub struct Burrdisk {
     pub screen: Screen,
     /// Mount point whose actions menu is open on the home screen.
     pub menu: Option<PathBuf>,
+    /// Whether macOS lets Burrdisk read protected folders; checked again on activation.
+    pub full_disk_access: bool,
+    /// The user chose to scan without Full Disk Access this session.
+    pub access_skipped: bool,
+    /// When the access step was opened, for its entrance.
+    pub access_since: Instant,
+    pub updater: Updater,
     _refresh: Option<Task<()>>,
+    _activation: Option<Subscription>,
 }
+
+/// How long "Up to date" stays in the titlebar after a check from the menu.
+const UP_TO_DATE_FOR: Duration = Duration::from_secs(4);
 
 pub const HOVER_FADE: Duration = Duration::from_millis(160);
 
@@ -153,9 +214,33 @@ impl Burrdisk {
             home_since: Instant::now(),
             screen: Screen::Home,
             menu: None,
+            full_disk_access: volumes::has_full_disk_access(),
+            access_skipped: false,
+            access_since: Instant::now(),
+            updater: Updater {
+                phase: UpdatePhase::Idle,
+                release: None,
+                open: false,
+                prompted: None,
+                since: Instant::now(),
+                _checks: None,
+                _job: None,
+            },
             _refresh: None,
+            _activation: None,
         };
+        // Coming back from System Settings is the moment access may have changed.
+        this._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                let granted = volumes::has_full_disk_access();
+                if granted != this.full_disk_access {
+                    this.full_disk_access = granted;
+                    cx.notify();
+                }
+            }
+        }));
         this.refresh_volumes(cx);
+        this.start_update_checks(cx);
         if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
             let path = path.canonicalize().unwrap_or(path);
             if let Some(volume) = volumes::list().into_iter().find(|v| v.mount == path) {
@@ -265,6 +350,12 @@ impl Burrdisk {
 
     pub fn start_scan(&mut self, target: ScanTarget, cx: &mut Context<Self>) {
         self.menu = None;
+        if !self.full_disk_access && !self.access_skipped && volumes::needs_full_disk_access(&target.path) {
+            self.access_since = Instant::now();
+            self.screen = Screen::Access(target);
+            cx.notify();
+            return;
+        }
         let progress = Arc::new(Progress::default());
         // An admin scan runs in a root helper that reports through files next to its output.
         let helper = target.admin.then(scan::HelperFiles::new);
@@ -338,8 +429,17 @@ impl Burrdisk {
         self.open_explorer(target, tree, Instant::now(), cx);
     }
 
+    /// Scans past the Full Disk Access step, for the rest of the session.
+    pub fn scan_without_access(&mut self, cx: &mut Context<Self>) {
+        if let Screen::Access(target) = &self.screen {
+            let target = target.clone();
+            self.access_skipped = true;
+            self.start_scan(target, cx);
+        }
+    }
+
     fn open_explorer(&mut self, target: ScanTarget, tree: Tree, scanned_at: Instant, cx: &mut Context<Self>) {
-        let segments = Rc::new(sunburst::layout(&tree, Tree::ROOT));
+        let segments = Rc::new(sunburst::layout(&tree, Tree::ROOT, Measure::Size));
         self.screen = Screen::Explorer(Explorer {
             target,
             scanned_at,
@@ -361,6 +461,10 @@ impl Burrdisk {
             countdown: None,
             trashing: false,
             notice: None,
+            mode: ChartMode::Size,
+            breakdown: None,
+            group_preview: None,
+            group_focus: None,
         });
         cx.notify();
     }
@@ -375,7 +479,7 @@ impl Burrdisk {
     pub fn go_home(&mut self, cx: &mut Context<Self>) {
         // Keep the finished scan so returning to it this session is instant.
         if let Screen::Explorer(explorer) = std::mem::replace(&mut self.screen, Screen::Home) {
-            let lobes = sunburst::layout(&explorer.tree, Tree::ROOT)
+            let lobes = sunburst::layout(&explorer.tree, Tree::ROOT, Measure::Size)
                 .into_iter()
                 .filter(|s| s.depth == 0)
                 .map(|s| Lobe { start: s.start, end: s.end, color: s.color })
@@ -392,7 +496,184 @@ impl Burrdisk {
         }
         self.home_since = Instant::now();
         self.refresh_volumes(cx);
+        self.prompt_update();
         cx.notify();
+    }
+
+    /// Looks for a newer release a few seconds after launch, then every few hours.
+    fn start_update_checks(&mut self, cx: &mut Context<Self>) {
+        if !update::enabled() {
+            return;
+        }
+        update::clean_up();
+        self.updater._checks = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(4)).await;
+            loop {
+                let found = cx.background_executor().spawn(async { update::check() }).await;
+                let ok = this.update(cx, |this, cx| this.update_checked(found, false, cx)).is_ok();
+                if !ok {
+                    break;
+                }
+                cx.background_executor().timer(update::CHECK_EVERY).await;
+            }
+        }));
+    }
+
+    /// Checks now, from the app menu, and says so even when there's nothing new.
+    pub fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        if !update::enabled() || !matches!(self.updater.phase, UpdatePhase::Idle | UpdatePhase::UpToDate(_)) {
+            // Busy or already found: show what's there.
+            self.updater.open = self.updater.release.is_some();
+            cx.notify();
+            return;
+        }
+        self.updater.phase = UpdatePhase::Checking;
+        self.updater.since = Instant::now();
+        cx.notify();
+        self.updater._job = Some(cx.spawn(async move |this, cx| {
+            let found = cx.background_executor().spawn(async { update::check() }).await;
+            this.update(cx, |this, cx| this.update_checked(found, true, cx)).ok();
+        }));
+    }
+
+    fn update_checked(&mut self, found: anyhow::Result<Option<Release>>, manual: bool, cx: &mut Context<Self>) {
+        let busy = matches!(self.updater.phase, UpdatePhase::Downloading(_) | UpdatePhase::Installing);
+        if busy {
+            return;
+        }
+        match found {
+            Ok(Some(release)) => {
+                let new = self.updater.release.as_ref().is_none_or(|r| r.version != release.version);
+                if new || matches!(self.updater.phase, UpdatePhase::Checking) {
+                    self.updater.phase = UpdatePhase::Available;
+                }
+                if new {
+                    self.updater.since = Instant::now();
+                }
+                self.updater.release = Some(release);
+                if manual {
+                    self.updater.open = true;
+                } else {
+                    self.prompt_update();
+                }
+            }
+            Ok(None) if manual => {
+                self.updater.phase = UpdatePhase::UpToDate(Instant::now());
+                self.updater.since = Instant::now();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(UP_TO_DATE_FOR).await;
+                    this.update(cx, |this, cx| {
+                        if let UpdatePhase::UpToDate(at) = this.updater.phase
+                            && at.elapsed() >= UP_TO_DATE_FOR
+                        {
+                            this.updater.phase = UpdatePhase::Idle;
+                            cx.notify();
+                        }
+                    })
+                    .ok();
+                })
+                .detach();
+            }
+            // Background checks fail quietly; the next one may work.
+            Ok(None) => {}
+            Err(err) if manual => self.updater.phase = UpdatePhase::Failed(format!("{err:#}")),
+            Err(_) => {}
+        }
+        cx.notify();
+    }
+
+    /// Opens the update card by itself once per version, and only on the disk
+    /// list, never over a scan or the explorer.
+    fn prompt_update(&mut self) {
+        let Some(release) = &self.updater.release else { return };
+        if matches!(self.screen, Screen::Home) && self.updater.prompted != Some(release.version) {
+            self.updater.prompted = Some(release.version);
+            self.updater.open = true;
+        }
+    }
+
+    pub fn toggle_update_card(&mut self, cx: &mut Context<Self>) {
+        self.updater.open = !self.updater.open;
+        cx.notify();
+    }
+
+    pub fn close_update_card(&mut self, cx: &mut Context<Self>) {
+        self.updater.open = false;
+        cx.notify();
+    }
+
+    /// Downloads, checks and installs the update, then restarts into it.
+    pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        let Some(release) = self.updater.release.clone() else { return };
+        let Some(asset) = release.asset.clone() else { return };
+        let progress = Arc::new(update::Progress::default());
+        progress.total.store(asset.size, std::sync::atomic::Ordering::Relaxed);
+        self.updater.phase = UpdatePhase::Downloading(progress.clone());
+        cx.notify();
+        self.updater._job = Some(cx.spawn(async move |this, cx| {
+            let job = cx.background_executor().spawn({
+                let progress = progress.clone();
+                async move { update::download(&asset, progress) }
+            });
+            // Moves the progress bar along while the download runs.
+            let downloaded = loop {
+                let tick = cx.background_executor().timer(Duration::from_millis(100));
+                if progress.done.load(std::sync::atomic::Ordering::Relaxed)
+                    >= progress.total.load(std::sync::atomic::Ordering::Relaxed)
+                    || progress.cancel.load(std::sync::atomic::Ordering::Relaxed)
+                {
+                    break job.await;
+                }
+                tick.await;
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    return;
+                }
+            };
+            let installed = match downloaded {
+                Ok(file) => {
+                    let ok = this.update(cx, |this, cx| {
+                        this.updater.phase = UpdatePhase::Installing;
+                        cx.notify();
+                    });
+                    if ok.is_err() {
+                        return;
+                    }
+                    let release = release.clone();
+                    cx.background_executor().spawn(async move { update::install(&release, &file) }).await
+                }
+                Err(err) => Err(err),
+            };
+            this.update(cx, |this, cx| match installed.and_then(|relaunch| relaunch.run()) {
+                Ok(()) => cx.quit(),
+                Err(_) if progress.cancel.load(std::sync::atomic::Ordering::Relaxed) => {
+                    this.updater.phase = UpdatePhase::Available;
+                    cx.notify();
+                }
+                Err(err) => {
+                    this.updater.phase = UpdatePhase::Failed(format!("{err:#}"));
+                    this.updater.open = true;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    pub fn cancel_update(&mut self, cx: &mut Context<Self>) {
+        if let UpdatePhase::Downloading(progress) = &self.updater.phase {
+            progress.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        cx.notify();
+    }
+
+    /// Whether restarting now would throw something away: a scan underway or kept,
+    /// or Trash work in flight.
+    pub fn update_loses_scans(&self) -> bool {
+        !self.scans.is_empty() || !matches!(self.screen, Screen::Home | Screen::Access(_))
+    }
+
+    pub fn update_blocked_by_trash(&self) -> bool {
+        matches!(&self.screen, Screen::Explorer(e) if e.countdown.is_some() || e.trashing)
     }
 
     /// Rescans whatever the explorer is showing, the same way it was scanned before.
@@ -412,6 +693,7 @@ impl Burrdisk {
     fn go_up(&mut self, _: &GoUp, _window: &mut Window, cx: &mut Context<Self>) {
         match &mut self.screen {
             Screen::Home => self.close_menu(cx),
+            Screen::Access(_) => self.go_home(cx),
             Screen::Scanning(_) => self.cancel_scan(cx),
             Screen::Explorer(explorer) => {
                 if explorer.context.is_some() {
@@ -419,6 +701,8 @@ impl Burrdisk {
                     cx.notify();
                 } else if explorer.countdown.is_some() {
                     explorer.countdown = None;
+                    cx.notify();
+                } else if explorer.group_up() {
                     cx.notify();
                 } else if let Some(parent) = explorer.tree.node(explorer.focus).parent {
                     explorer.set_focus(parent);
@@ -432,7 +716,15 @@ impl Burrdisk {
 
     /// Steps up to the parent folder; from the disk's top folder, back to the disk list.
     pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.screen, Screen::Access(_)) {
+            self.go_home(cx);
+            return;
+        }
         let Some(explorer) = self.explorer() else { return };
+        if explorer.group_up() {
+            cx.notify();
+            return;
+        }
         match explorer.tree.node(explorer.focus).parent {
             Some(parent) => {
                 explorer.set_focus(parent);
@@ -620,6 +912,9 @@ impl Explorer {
 
     /// The folder Forward opens: the next one down the trail, else a lone subfolder.
     pub fn next_folder(&self) -> Option<NodeId> {
+        if self.group_focus.is_some() {
+            return None;
+        }
         if self.trail != self.focus && self.tree.is_ancestor(self.focus, self.trail) {
             let lineage = self.tree.lineage(self.trail);
             let at = lineage.iter().position(|id| *id == self.focus)?;
@@ -628,11 +923,87 @@ impl Explorer {
         self.only_subfolder()
     }
 
+    pub fn measure(&self) -> Measure {
+        match self.mode {
+            ChartMode::Count => Measure::Count,
+            _ => Measure::Size,
+        }
+    }
+
+    /// Rings in the current chart.
+    pub fn rings(&self) -> usize {
+        match (self.mode, &self.breakdown, self.group_focus) {
+            // An opened type has fewer levels below it; keep at least two ring widths.
+            (ChartMode::Types, Some(breakdown), Some(g)) => (sunburst::TYPE_RINGS - 1 - breakdown.level(g)).max(2),
+            (ChartMode::Types, ..) => sunburst::TYPE_RINGS,
+            _ => sunburst::RINGS,
+        }
+    }
+
+    /// The breakdown group the type chart starts from.
+    pub fn group_root(&self) -> u32 {
+        self.group_focus.unwrap_or(Breakdown::ROOT)
+    }
+
+    /// Opens a file type or extension in the type chart, like opening a folder.
+    /// `None` returns to the whole folder.
+    pub fn open_group(&mut self, group: Option<u32>) {
+        let group = group.filter(|g| *g != Breakdown::ROOT);
+        if group == self.group_focus {
+            return;
+        }
+        self.group_focus = group;
+        self.hover = None;
+        self.prev_hover = None;
+        self.group_preview = None;
+        self.context = None;
+        self.revealed = Instant::now();
+        self.layout_groups();
+    }
+
+    /// Steps the type chart out to the enclosing type, or back to the whole folder.
+    /// Returns false when no type is open.
+    pub fn group_up(&mut self) -> bool {
+        let Some(g) = self.group_focus else { return false };
+        let parent = self.breakdown.as_ref().and_then(|b| b.group(g).parent);
+        self.open_group(parent);
+        true
+    }
+
+    fn layout_groups(&mut self) {
+        if let Some(breakdown) = &self.breakdown {
+            self.segments = Rc::new(sunburst::layout_types(&self.tree, breakdown, self.group_root()));
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: ChartMode) {
+        if mode == self.mode {
+            return;
+        }
+        self.mode = mode;
+        self.zoom = None;
+        self.hover = None;
+        self.prev_hover = None;
+        self.preview = None;
+        self.group_preview = None;
+        self.group_focus = None;
+        self.context = None;
+        self.revealed = Instant::now();
+        self.relayout();
+    }
+
     pub fn set_focus(&mut self, id: NodeId) {
         if self.tree.node(id).kind != NodeKind::Dir || id == self.focus {
             return;
         }
-        self.zoom = Zoom::new(&self.tree, self.focus, id);
+        self.group_focus = None;
+        if self.mode == ChartMode::Types {
+            // The type chart is rebuilt for the new folder and sweeps in again.
+            self.zoom = None;
+            self.revealed = Instant::now();
+        } else {
+            self.zoom = Zoom::new(&self.tree, self.focus, id, self.measure());
+        }
         self.focus = id;
         // Going up keeps the trail; going anywhere off it starts a new one.
         if !self.tree.is_ancestor(id, self.trail) {
@@ -641,6 +1012,7 @@ impl Explorer {
         self.hover = None;
         self.prev_hover = None;
         self.preview = None;
+        self.group_preview = None;
         self.context = None;
         self.relayout();
     }
@@ -649,6 +1021,16 @@ impl Explorer {
     /// (or, for a file, the folder it's in).
     pub fn set_chart_hover(&mut self, hover: Option<Hover>) {
         self.set_hover(hover);
+        if let Some(breakdown) = &self.breakdown {
+            // Types list their extensions, extensions their biggest items.
+            self.group_preview = match hover {
+                Some(Hover::Target(Target::Group(g) | Target::GroupRest(g))) => Some(g),
+                Some(Hover::Target(Target::Node(id))) => breakdown.group_of_file(id),
+                _ => None,
+            }
+            .filter(|g| *g != self.group_root());
+            return;
+        }
         let folder = match hover {
             Some(Hover::Target(Target::Node(id))) if self.tree.node(id).kind == NodeKind::Dir => Some(id),
             Some(Hover::Target(Target::Node(id))) => self.tree.node(id).parent,
@@ -689,7 +1071,26 @@ impl Explorer {
     }
 
     pub fn relayout(&mut self) {
-        self.segments = Rc::new(sunburst::layout(&self.tree, self.focus));
+        // Group numbers belong to one breakdown; a rebuilt one invalidates them.
+        self.group_preview = None;
+        if self.mode == ChartMode::Types {
+            // Keep an opened type open across a rebuild (after a move to the Trash), if it still exists.
+            let opened = self.breakdown.as_ref().zip(self.group_focus).map(|(old, g)| {
+                let group = old.group(g);
+                let ext = (old.level(g) == 1).then(|| group.name.clone());
+                (group.category, ext)
+            });
+            let breakdown = Breakdown::new(&self.tree, self.focus);
+            self.group_focus = opened.and_then(|(category, ext)| {
+                breakdown.find(category, ext.as_deref()).or_else(|| breakdown.find(category, None))
+            });
+            self.breakdown = Some(Rc::new(breakdown));
+            self.layout_groups();
+        } else {
+            self.breakdown = None;
+            self.group_focus = None;
+            self.segments = Rc::new(sunburst::layout(&self.tree, self.focus, self.measure()));
+        }
     }
 
     /// Adds an item to the tray, keeping the set free of nested duplicates.
@@ -864,6 +1265,7 @@ impl Render for Burrdisk {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = match &self.screen {
             Screen::Home => crate::ui::home::render(self, window, cx).into_any_element(),
+            Screen::Access(_) => crate::ui::access::render(self, window, cx).into_any_element(),
             Screen::Scanning(_) => crate::ui::scanning::render(self, window, cx).into_any_element(),
             Screen::Explorer(_) => crate::ui::explorer::render(self, window, cx).into_any_element(),
         };
@@ -879,6 +1281,16 @@ impl Render for Burrdisk {
             .on_action(cx.listener(Self::on_forward))
             .on_action(cx.listener(Self::on_preview))
             .on_action(cx.listener(Self::on_collect))
+            .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| this.check_for_updates(cx)))
+            // The mouse's side buttons (and two-finger swipes) step back and forward.
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Back),
+                cx.listener(|this, _, _, cx| this.go_back(cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Navigate(NavigationDirection::Forward),
+                cx.listener(|this, _, _, cx| this.go_forward(cx)),
+            )
             .size_full()
             .flex()
             .flex_col()

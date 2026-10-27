@@ -2,7 +2,9 @@ pub mod components;
 pub mod explorer;
 pub mod home;
 pub mod scanning;
+pub mod update;
 pub mod fx;
+pub mod access;
 
 /// How much larger than its macOS point sizes the UI is drawn. Windows at 100%
 /// scaling shows a point as one small pixel, so everything runs a size up there.

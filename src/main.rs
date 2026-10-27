@@ -3,12 +3,14 @@
 
 mod app;
 mod assets;
+mod filetype;
 mod format;
 mod platform;
 mod scan;
 mod sunburst;
 mod theme;
 mod ui;
+mod update;
 mod volumes;
 
 use gpui::{
@@ -17,7 +19,7 @@ use gpui::{
 };
 use ui::px;
 
-use app::{Burrdisk, Collect, GoBack, GoForward, GoUp, Preview, Quit};
+use app::{Burrdisk, CheckForUpdates, Collect, GoBack, GoForward, GoUp, Preview, Quit};
 
 fn main() -> std::process::ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -44,13 +46,20 @@ fn main() -> std::process::ExitCode {
                 cx.bind_keys([KeyBinding::new("space", Preview, None)]);
             }
             cx.on_action(|_: &Quit, cx| cx.quit());
+            let mut items = Vec::new();
+            if update::enabled() {
+                items.extend([MenuItem::action("Check for Updates\u{2026}", CheckForUpdates), MenuItem::separator()]);
+            }
             cx.set_menus(vec![Menu {
                 name: "Burrdisk".into(),
-                items: vec![
+                items: items
+                    .into_iter()
+                    .chain([
                     MenuItem::os_submenu("Services", SystemMenuType::Services),
                     MenuItem::separator(),
                     MenuItem::action("Quit Burrdisk", Quit),
-                ],
+                    ])
+                    .collect(),
             }]);
 
             // Mona Sans, bundled so Burrdisk reads the same on every platform.

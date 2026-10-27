@@ -21,6 +21,7 @@ pub enum NodeKind {
 pub struct Node {
     pub name: Box<str>,
     pub size: u64,
+    /// Files inside (1 for a file); folders themselves aren't counted.
     pub items: u64,
     pub kind: NodeKind,
     pub parent: Option<NodeId>,
@@ -244,7 +245,7 @@ impl Walker<'_> {
                 Entry {
                     name,
                     size: own + children.iter().map(|c| c.size).sum::<u64>(),
-                    items: 1 + children.iter().map(|c| c.items).sum::<u64>(),
+                    items: children.iter().map(|c| c.items).sum::<u64>(),
                     is_dir: true,
                     children,
                 }

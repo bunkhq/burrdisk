@@ -4,7 +4,9 @@
 ;   iscc /DAppVersion=0.2.0 /DSourceExe=...\burrdisk.exe /DOutputDir=...\dist installer\burrdisk.iss
 ;
 ; Installs per user by default (no administrator prompt), with an option to
-; install for all users.
+; install for all users. Burrdisk updates itself by downloading the next
+; release's installer and running it silently over the same install, so the
+; installer's file name and AppId must stay as they are.
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -60,3 +62,12 @@ Name: "{autodesktop}\Burrdisk"; Filename: "{app}\Burrdisk.exe"; Tasks: desktopic
 
 [Run]
 Filename: "{app}\Burrdisk.exe"; Description: "{cm:LaunchProgram,Burrdisk}"; Flags: nowait postinstall skipifsilent
+; Burrdisk's own updater runs this installer silently with /relaunch=1 and quits;
+; this opens the updated app again.
+Filename: "{app}\Burrdisk.exe"; Flags: nowait runasoriginaluser skipifnotsilent; Check: Relaunching
+
+[Code]
+function Relaunching: Boolean;
+begin
+  Result := ExpandConstant('{param:relaunch|0}') = '1';
+end;

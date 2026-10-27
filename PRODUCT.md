@@ -22,14 +22,14 @@ An interactive sunburst you dive through (click a ring to open a folder, the cen
 
 ## Operating Context
 
-Home lists disks: the startup disk first, other drives below, mounted disk images tucked away. Scanning shows live progress. The explorer is the sunburst, sidebar, and tray. Scans are cached for the session. Full Disk Access changes how much of the startup disk the scan can see.
+Home lists disks: the startup disk first, other drives below, mounted disk images tucked away. Scanning shows live progress. The explorer is the sunburst, sidebar, and tray. Scans are cached for the session. Full Disk Access changes how much of the startup disk the scan can see. Burrdisk updates itself from GitHub Releases; an Update button in the titlebar and a card below it ask before anything is downloaded, and restarting is the user’s call.
 
 ## Capabilities and Constraints
 
 - Sizes are allocated bytes on disk; hard links counted once.
 - Space the scan cannot see on the startup disk shows as Hidden space.
 - Deleting moves items to the Trash; nothing is removed permanently.
-- Keyboard: Esc, ⌘[, ⌫ go up a folder; ⌘Q quits.
+- Keyboard: Esc, ⌘[, ⌫ go up a folder; ⌘Q quits. The mouse's back and forward buttons step back and forward like the titlebar arrows.
 
 ## Brand Commitments
 
