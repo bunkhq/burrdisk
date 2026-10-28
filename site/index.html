@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Burrdisk: see what's filling your disk, then clear it</title>
-  <meta name="description" content="Burrdisk is a free, open-source disk space visualizer for macOS and Windows. Dive through a sunburst of your folders, collect what you don't need, and move it all to the Trash in one go.">
+  <meta name="description" content="Burrdisk is a free, open-source disk space visualizer for macOS and Windows. Dig through a sunburst of your folders, collect what you don't need, and move it all to the Trash in one go.">
   <meta name="theme-color" content="#141416">
   <link rel="icon" href="img/icon-256.png">
   <meta property="og:title" content="Burrdisk">
@@ -59,6 +59,10 @@
         <p class="sentence"><strong>432 GB</strong> used of 460 GB</p>
         <div class="bar"><span style="--fill:.94"></span></div>
       </div>
+      <a class="scroll-cue" href="#how" data-scroll-cue>
+        <span>Scroll to see how it works</span>
+        <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </a>
       <div class="hero-copy">
         <h1 id="hero-title">Dig right in. Free up your disk.</h1>
         <p class="lede">Burrdisk shows you exactly what is filling your Mac or PC. Pick what you don't need, and move it all to the Trash in one go.</p>
@@ -106,8 +110,8 @@
           <h3>Every folder is a ring.</h3>
           <p>The scan opens as a sunburst. Each ring is one level deeper, and each slice is as big as the space it takes. The biggest thing on screen is always orange.</p>
         </li>
-        <li class="step" data-step="dive">
-          <h3>Click a ring to dive in.</h3>
+        <li class="step" data-step="dig">
+          <h3>Click a ring to dig in.</h3>
           <p>Open a folder by clicking its slice, and go back with the center. The sidebar lists everything in the folder you're in, largest first, in the same colors.</p>
         </li>
         <li class="step" data-step="collect">
@@ -138,8 +142,8 @@
     <section class="numbers stage" id="numbers" aria-labelledby="numbers-title">
       <h2 id="numbers-title">Numbers you can trust.</h2>
       <dl class="facts">
-        <div><dt>Space on disk, not file length</dt><dd>Sizes are the bytes a file really takes, so sparse and compressed files count correctly. Hard links count once.</dd></div>
-        <div><dt>Hidden space, named</dt><dd>Space the scan can't read on your startup disk, like snapshots and protected system files, shows up as its own slice instead of vanishing.</dd></div>
+        <div><dt>Sizes match what's really used</dt><dd>Burrdisk counts the space each file actually takes up on your disk. Compressed files aren't overcounted, and a file that appears in two places through a hard link only counts once.</dd></div>
+        <div><dt>It tells you what it can't see</dt><dd>Some of your startup disk is off-limits to every app, like system snapshots and protected files. Instead of leaving a gap, Burrdisk shows that space as its own slice, called Hidden space.</dd></div>
         <div><dt>Faster as administrator on Windows</dt><dd>Rescan as Administrator reads an NTFS drive's file table directly. It's several times faster and counts System Volume Information too.</dd></div>
         <div><dt>Nothing leaves your computer</dt><dd>No accounts, no analytics, no telemetry. The only thing Burrdisk asks the internet is whether there's a new version.</dd></div>
       </dl>
