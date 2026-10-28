@@ -1,0 +1,32 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-font",
+        "value": "mona sans",
+        "createdAt": "2026-10-28T14:43:13.563Z",
+        "reason": "false positive: DESIGN.md typography declares 'Mona Sans (bundled)'; the detector doesn't match the parenthetical"
+      },
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "site/styles.css"
+        ],
+        "createdAt": "2026-10-28T14:52:14.507Z",
+        "reason": "sanctioned: DESIGN.md 'Halo Not Drop Rule' makes same-hue glows the brand's elevation system"
+      },
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "site/index.html"
+        ],
+        "createdAt": "2026-10-28T14:52:14.525Z",
+        "reason": "sanctioned: DESIGN.md 'Halo Not Drop Rule' makes same-hue glows the brand's elevation system"
+      }
+    ]
+  }
+}
