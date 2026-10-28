@@ -291,8 +291,10 @@ def explorer_window(tray=None, chart=(92, 74)):
         )
     ty = h - 80
     body += f'<rect x="0" y="{ty}" width="{w}" height="80" fill="url(#tray)"/><rect x="0" y="{ty}" width="{w}" height="1" fill="#ffffff" fill-opacity="0.07"/>'
+    # The sidebar and the tray run to the window's edges; its corners round them off.
+    clip = f'<clipPath id="winclip"><rect width="{w}" height="{h}" rx="14"/></clipPath>'
     if tray:
-        return w, h, chrome(w, h, title) + body + tray(w, ty) + edge(w, h)
+        return w, h, chrome(w, h, title) + clip + f'<g clip-path="url(#winclip)">{body}{tray(w, ty)}</g>' + edge(w, h)
     body += f'<rect x="20" y="{ty + 16}" width="48" height="48" rx="14" fill="url(#ember)" filter="url(#btnglow)"/>'
     body += text(44, ty + 48, "3", 22, EMBER_INK, 700, "middle")
     body += text(84, ty + 50, f"23.9<tspan font-size='14' fill='{MUTED}' font-weight='500'> GB</tspan>", 22, TEXT, 700)
@@ -301,7 +303,7 @@ def explorer_window(tray=None, chart=(92, 74)):
     ):
         body += chip(40 + i, x, ty + 25, 1.0, 0, 0, 1, glyph, name, size, lobe)
     body += button(w - 20 - 140, ty + 24, 140, "Move to Trash", "danger")
-    return w, h, chrome(w, h, title) + body + edge(w, h)
+    return w, h, chrome(w, h, title) + clip + f'<g clip-path="url(#winclip)">{body}</g>' + edge(w, h)
 
 
 def placed(content, w, h, x, y, rot, scale=1.0):
