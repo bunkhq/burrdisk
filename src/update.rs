@@ -247,7 +247,7 @@ fn summary(notes: &str) -> String {
         let cut: String = text.chars().take(237).collect();
         format!("{}\u{2026}", cut.trim_end_matches(|c: char| !c.is_whitespace()).trim_end())
     } else {
-        text
+        text.strip_suffix('.').map(str::to_string).unwrap_or(text)
     }
 }
 
@@ -459,7 +459,7 @@ mod tests {
         });
         let release = parse_release(&json).unwrap();
         assert_eq!(release.version, Version(9, 1, 0));
-        assert_eq!(release.summary, "Burrdisk now runs on Windows, see the notes.");
+        assert_eq!(release.summary, "Burrdisk now runs on Windows, see the notes");
         let asset = release.asset.unwrap();
         let expect = if cfg!(target_os = "macos") {
             if cfg!(target_arch = "aarch64") { ("b", "bb") } else { ("c", "cc") }

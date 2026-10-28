@@ -150,15 +150,15 @@ fn card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdisk>) -> AnyEleme
     // What restarting costs, said before the button rather than discovered after
     let mut cautions: Vec<(Icon, String)> = Vec::new();
     if let Some(why) = &blocker {
-        cautions.push((Icon::ShieldAlert, format!("Burrdisk can\u{2019}t update itself here: {why}.")));
+        cautions.push((Icon::ShieldAlert, format!("Burrdisk can\u{2019}t update itself here: {why}")));
     } else if release.is_some_and(|r| r.asset.is_none()) {
-        cautions.push((Icon::ShieldAlert, "This release has no download for this computer yet.".into()));
+        cautions.push((Icon::ShieldAlert, "This release has no download for this computer yet".into()));
     } else if release.is_some() && !matches!(updater.phase, UpdatePhase::Failed(_)) {
         if app.update_loses_scans() {
-            cautions.push((Icon::Refresh, "Burrdisk restarts to update, so scans will need to run again.".into()));
+            cautions.push((Icon::Refresh, "Burrdisk restarts to update, so scans will need to run again".into()));
         }
         if cfg!(target_os = "macos") && app.full_disk_access {
-            cautions.push((Icon::ShieldCheck, "macOS will ask for Full Disk Access again after the update.".into()));
+            cautions.push((Icon::ShieldCheck, "macOS will ask for Full Disk Access again after the update".into()));
         }
     }
     if let UpdatePhase::Failed(err) = &updater.phase {
@@ -271,12 +271,12 @@ fn card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdisk>) -> AnyEleme
         .into_any_element()
 }
 
-/// Ends an error from the updater as a sentence: "Couldn't reach GitHub."
+/// Capitalizes an error from the updater and drops any final period: "Couldn't reach GitHub"
 fn sentence(err: &str) -> String {
     let mut chars = err.chars();
     let first = chars.next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default();
     let text = format!("{first}{}", chars.as_str());
-    if text.ends_with('.') { text } else { format!("{text}.") }
+    text.strip_suffix('.').map(str::to_string).unwrap_or(text)
 }
 
 fn actions(secondary: impl IntoElement, primary: impl IntoElement) -> AnyElement {

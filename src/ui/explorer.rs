@@ -1363,7 +1363,7 @@ fn access_panel() -> impl IntoElement {
                 .child(
                     div()
                         .text_color(theme::text_muted())
-                        .child("macOS is hiding app data from the scan, so it piles up as Hidden space."),
+                        .child("macOS is hiding app data from the scan, so it piles up as Hidden space"),
                 )
                 .child(
                     div()
@@ -2128,7 +2128,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                             .text_color(theme::text_faint())
                             .whitespace_nowrap()
                             .truncate()
-                            .child(format!("Collect what you want gone, then move it all to the {} at once.", platform::TRASH)),
+                            .child(format!("Collect what you want gone, then move it all to the {} at once", platform::TRASH)),
                     ),
             )
         })
