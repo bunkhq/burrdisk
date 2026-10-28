@@ -16,12 +16,9 @@ Burrdisk is a native disk space visualizer for macOS and Windows, written in Rus
 - Use scoped Conventional Commits, e.g. `fix(explorer): ...`, `feat(scan): ...`, `chore(site): ...`
 - Keep commit messages to the subject line, avoid commit bodies unless absolutely necessary, and keep them very short when used
 - Always create new branches for features, never work on the same branch you start on unless it currently fits the work you are doing, and never work on `main`
+- Never add co-author trailers, "Generated with" lines or any other AI or agent attribution to commits, PRs, issues or files. Commits and PRs carry no sign of an agent
 
 ## Text Conventions
 
 - Do not put periods at the end of comments or user-facing strings
 
-## Testing
-
-- Preferably, keep testing to a minimum, don't add new tests unless asked, and don't keep test files around. `cargo build` (or `cargo check`) is usually enough, run `cargo test` only when touching code the existing unit tests cover
-- Preferably, don't test your changes yourself by launching and driving the app or opening the site in a browser. The human can test them faster, has a better eye, and will tell you what is wrong. Only do so when prompted
