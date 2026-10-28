@@ -16,7 +16,7 @@
   --text: #f2f2f3;
   --muted: #a1a1a8;
   --faint: #6b6b73;
-  /* Faint, lifted to 4.5:1 on the ground for text a visitor has to read. */
+  /* Faint, lifted to 4.5:1 on the ground for text a visitor has to read */
   --faint-text: #8b8b93;
   --hairline: #ffffff12;
   --hairline-strong: #ffffff24;
@@ -64,7 +64,7 @@ html { scrollbar-color: #3a3a40 var(--ground); }
 .skip:focus { top: 12px; }
 .ic { width: 18px; height: 18px; flex: none; }
 
-/* Buttons: lit keys, never outlined. A soft light follows the cursor inside. */
+/* Buttons: lit keys, never outlined. A soft light follows the cursor inside */
 .btn {
   position: relative;
   isolation: isolate;
@@ -145,7 +145,7 @@ html { scrollbar-color: #3a3a40 var(--ground); }
 .nav nav a { text-decoration: none; transition: color 260ms var(--cubic); }
 .nav nav a:hover { color: var(--text); transition-duration: 130ms; }
 
-/* Only the stage in view glows in data color; the rest sits in graphite. */
+/* Only the stage in view glows in data color; the rest sits in graphite */
 .data { transition: filter 900ms var(--cubic); }
 .stage:not(.lit) .data, .dig:not(.lit) .data { filter: saturate(0.15) brightness(0.8); }
 
@@ -204,7 +204,7 @@ html { scrollbar-color: #3a3a40 var(--ground); }
 }
 @keyframes fill { from { transform: scaleX(0.4); } }
 
-/* Pinned to the bottom of the screen until the visitor starts scrolling. */
+/* Pinned to the bottom of the screen until the visitor starts scrolling */
 .scroll-cue {
   position: fixed;
   inset: auto 0 0;
@@ -223,14 +223,14 @@ html { scrollbar-color: #3a3a40 var(--ground); }
   transition: opacity 400ms var(--cubic);
 }
 .scroll-cue .chevrons { width: 32px; height: 46px; overflow: visible; }
-/* Three chevrons; a pulse of light runs down them, top to bottom. */
+/* Three chevrons; a pulse of light runs down them, top to bottom */
 .scroll-cue .chevrons path { animation: pulse 1.5s ease-in-out infinite; opacity: 0.18; }
 .scroll-cue .chevrons path:nth-child(2) { animation-delay: 0.2s; }
 .scroll-cue .chevrons path:nth-child(3) { animation-delay: 0.4s; }
 .scroll-cue:hover .chevrons { color: var(--ember-hi); }
 .scroll-cue.gone { opacity: 0; pointer-events: none; }
 @keyframes pulse { 0%, 100% { opacity: 0.18; } 35% { opacity: 1; } }
-/* Short desktop windows: pull the hero up so the prompt clears the buttons. */
+/* Short desktop windows: pull the hero up so the prompt clears the buttons */
 @media (min-width: 901px) and (max-height: 800px) {
   .hero { padding-top: calc(var(--nav-h) + 20px); }
   .hero-burr { top: calc(var(--nav-h) + 20px + 92px); }

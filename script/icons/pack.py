@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# icns slot type -> pixel size. Retina slots (@2x) reuse the larger renders.
+# icns slot type -> pixel size. Retina slots (@2x) reuse the larger renders
 ICNS_SLOTS = [
     ("icp4", 16), ("icp5", 32), ("ic11", 32),   # 16pt, 32px, 16pt@2x
     ("ic12", 64), ("ic07", 128), ("ic13", 256),  # 32pt@2x, 128pt, 128pt@2x

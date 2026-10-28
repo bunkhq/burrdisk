@@ -1,5 +1,5 @@
 // Burrdisk's site: the burrs and the sunburst are drawn here, from an example
-// disk, with the app's own color rules (DESIGN.md) and motion.
+// disk, with the app's own color rules (DESIGN.md) and motion
 "use strict";
 
 const TAU = Math.PI * 2;
@@ -17,7 +17,7 @@ const el = (name, attrs = {}) => {
   return node;
 };
 
-// One tween at a time per key; a new one starts from wherever the old one was.
+// One tween at a time per key; a new one starts from wherever the old one was
 const tweens = new Map();
 function tween(key, duration, ease, step, done) {
   cancelAnimationFrame(tweens.get(key));
@@ -36,14 +36,14 @@ function tween(key, duration, ease, step, done) {
   tweens.set(key, requestAnimationFrame(frame));
 }
 
-// Fullness: green below 70% full, through yellow-green to red-orange by 90%.
+// Fullness: green below 70% full, through yellow-green to red-orange by 90%
 function fullness(f) {
   const t = clamp((f - 0.7) / 0.2, 0, 1);
   const hue = t < 0.5 ? lerp(144, 90, t / 0.5) : lerp(90, 11, (t - 0.5) / 0.5);
   return `hsl(${hue.toFixed(1)} 70% 56%)`;
 }
 
-// A spine: a tapered quad from a root buried in the core to a thin tip, and a bead.
+// A spine: a tapered quad from a root buried in the core to a thin tip, and a bead
 function spinePath(a, r0, r1, rootHalf, tipHalf) {
   const dx = Math.sin(a), dy = -Math.cos(a), nx = -dy, ny = dx;
   const p = (r, s) => `${(r * dx + s * nx).toFixed(2)},${(r * dy + s * ny).toFixed(2)}`;
@@ -61,7 +61,7 @@ for (const svg of document.querySelectorAll("[data-wordmark]")) {
 }
 
 /* ---------- The example disk ---------- */
-// [name, GB, kind, children]: d folder, f file, h hidden space, s smaller items.
+// [name, GB, kind, children]: d folder, f file, h hidden space, s smaller items
 const DISK = ["Macintosh HD", 432, "d", [
   ["Users", 182, "d", [
     ["you", 160, "d", [
@@ -92,7 +92,7 @@ const ICON = {
   mov: '<path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
 };
 
-// Fill out folders the example doesn't spell out, so every ring reads as a disk.
+// Fill out folders the example doesn't spell out, so every ring reads as a disk
 function grow(node, depth) {
   const [name, size, kind, kids] = node;
   const out = { name, size, kind, depth, children: [] };
@@ -125,7 +125,7 @@ const collectNodes = COLLECT.map(find);
 const collectedGB = collectNodes.reduce((s, n) => s + n.size, 0);
 
 // color_for: hue by position in the focused folder, rotated so its biggest child
-// takes the start hue; each ring deeper is a little darker and calmer.
+// takes the start hue; each ring deeper is a little darker and calmer
 function colorFor(n, focus, collected) {
   const k = Math.max(1, n.depth - focus.depth) - 1;
   if (n.kind === "h") return "oklch(48% 0.04 300)";
@@ -141,7 +141,7 @@ function colorFor(n, focus, collected) {
 }
 
 /* ---------- Burrs ---------- */
-// Unscanned: spines all round, the used fraction lit in Fullness, the rest dim stubs.
+// Unscanned: spines all round, the used fraction lit in Fullness, the rest dim stubs
 function unscannedSpines(count, used, R, coreRatio = 0.34) {
   const r0 = R * coreRatio, tone = fullness(used), out = [];
   for (let i = 0; i < count; i++) {
@@ -151,7 +151,7 @@ function unscannedSpines(count, used, R, coreRatio = 0.34) {
   }
   return out;
 }
-// Scanned: one lobe per top-level folder, its size by share, its reach by √share.
+// Scanned: one lobe per top-level folder, its size by share, its reach by √share
 function dataSpines(count, R) {
   const r0 = R * 0.34, out = [], top = root.children, max = top[0].size;
   let i = 0;
@@ -178,7 +178,7 @@ function drawBurr(group, spines, R, progress, rim, core = true, coreRatio = 0.34
   }
   const kids = group.children;
   spines.forEach((s, i) => {
-    // Spines grow out sweeping clockwise: each starts a little after the last.
+    // Spines grow out sweeping clockwise: each starts a little after the last
     const local = clamp((progress - (i / spines.length) * 0.45) / 0.55, 0, 1);
     const r1 = r0 + s.reach * easeCubic(local);
     kids[i * 2].setAttribute("d", spinePath(s.a, r0 - 3, Math.max(r1, r0 - 2), rootHalf, 0.9));
@@ -205,11 +205,11 @@ if (heroSvg) {
   const g = el("g");
   heroSvg.append(g);
   // The full bar bristles into the burr: its spines sweep out once the bar has filled.
-  // A small hub, so the burr's center stays hidden behind the warning.
+  // A small hub, so the burr's center stays hidden behind the warning
   const spines = unscannedSpines(84, used, R, 0.18);
   drawBurr(g, spines, R, 0, false, false, 0.18);
   setTimeout(() => tween("hero", 1300, (t) => t, (t) => drawBurr(g, spines, R, t, false, false, 0.18)), REDUCED ? 0 : 1100);
-  // Scrolling away, the spines bristle and the burr turns, as if dug into.
+  // Scrolling away, the spines bristle and the burr turns, as if dug into
   let ticking = false;
   addEventListener("scroll", () => {
     if (ticking || REDUCED) return;
@@ -252,7 +252,7 @@ if (chart) {
   const toast = document.querySelector("[data-toast]");
   const trashBtn = document.querySelector("[data-trash-btn]");
 
-  // The view: which slice of the disk fills the circle, how deep, how far swept.
+  // The view: which slice of the disk fills the circle, how deep, how far swept
   const view = { x0: 0, x1: 1, d: 0, sweep: 0, burr: 0 };
   let focus = root;
   let collected = new Set();
@@ -290,7 +290,7 @@ if (chart) {
 
   const scanned = dataSpines(84, R);
   const before = unscannedSpines(scanned.length, 432 / 460, R);
-  // A scan: the warning's red spines retract and grow back as the disk's folders.
+  // A scan: the warning's red spines retract and grow back as the disk's folders
   let morph = 1;
   function drawBurrAt(t) {
     const spines = scanned.map((s, i) => {
@@ -327,7 +327,7 @@ if (chart) {
   }
   const fmt = (gb) => (Math.round(gb * 10) / 10).toString();
 
-  // The tray, as the app draws it.
+  // The tray, as the app draws it
   let timers = [];
   const later = (ms, fn) => timers.push(setTimeout(fn, REDUCED ? 0 : ms));
   function clearTimers() { timers.forEach(clearTimeout); timers = []; }
@@ -414,7 +414,7 @@ if (chart) {
     },
     trash() {
       steps.collect(true);
-      // Five seconds, the badge red, a white ring draining clockwise.
+      // Five seconds, the badge red, a white ring draining clockwise
       tray.classList.add("counting");
       trashBtn.lastChild.textContent = "Stop";
       let left = 5;
@@ -462,7 +462,7 @@ if (chart) {
   }, { rootMargin: matchMedia("(max-width: 900px)").matches ? "-58% 0px -40% 0px" : "-48% 0px -48% 0px" });
   stepEls.forEach((s) => io.observe(s));
   stepEls[0].classList.add("on");
-  // Until the Scan step is reached, the drawing waits as the warning's red burr.
+  // Until the Scan step is reached, the drawing waits as the warning's red burr
   morph = 0;
   view.burr = 1;
   tray.style.opacity = 0;

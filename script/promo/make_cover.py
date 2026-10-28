@@ -22,13 +22,13 @@ OUT = ROOT / "assets" / "promo"
 W, H = 1920, 1080
 
 # Top-level folders of a typical startup disk, largest first: Users, System,
-# Applications, Library, private, opt, the rest.
+# Applications, Library, private, opt, the rest
 SHARES = [0.38, 0.19, 0.14, 0.11, 0.08, 0.06, 0.04]
 
 BX, BY, REACH = 1450, 560, 600
 
 # Things a scan turns up, floating at different depths as Collector chips:
-# (x, y, scale, tilt, blur, opacity, icon, name, size, lobe).
+# (x, y, scale, tilt, blur, opacity, icon, name, size, lobe)
 CHIPS = [
     (300, 168, 1.75, -5, 0.0, 0.92, "folder", "DerivedData", "18.4 GB", 0),
     (520, 900, 1.45, 4, 1.2, 0.72, "archive", "Backup 2023.zip", "9.6 GB", 3),
@@ -38,7 +38,7 @@ CHIPS = [
     (560, 46, 1.05, 4, 2.6, 0.45, "image", "Photos Library", "7.8 GB", 5),
 ]
 
-# Stroke icons from assets/icons (24 unit grid).
+# Stroke icons from assets/icons (24 unit grid)
 ICONS = {
     "folder": '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
     "video": '<path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"/><rect x="2" y="6" width="14" height="12" rx="2"/>',
@@ -52,7 +52,7 @@ ICONS = {
     "drive": '<line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/>',
 }
 
-# Platform marks, filled on a 24 unit grid. Apple from Simple Icons (CC0).
+# Platform marks, filled on a 24 unit grid. Apple from Simple Icons (CC0)
 APPLE = (
     "M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 "
     "1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 "

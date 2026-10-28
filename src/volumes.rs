@@ -18,9 +18,9 @@ pub struct Volume {
     pub kind: VolumeKind,
     pub file_system: String,
     pub total: u64,
-    /// Space the OS can hand out right now, including purgeable space.
+    /// Space the OS can hand out right now, including purgeable space
     pub available: u64,
-    /// Strictly free blocks, excluding purgeable space.
+    /// Strictly free blocks, excluding purgeable space
     pub free: u64,
 }
 
@@ -142,7 +142,7 @@ fn strict_free(_mount: &Path) -> Option<u64> {
     None
 }
 
-/// Mount points of attached disk images, so they can be grouped away from real drives.
+/// Mount points of attached disk images, so they can be grouped away from real drives
 #[cfg(target_os = "macos")]
 fn disk_image_mounts() -> Vec<PathBuf> {
     let Ok(output) = std::process::Command::new("hdiutil").arg("info").output() else {
@@ -162,7 +162,7 @@ fn disk_image_mounts() -> Vec<PathBuf> {
     Vec::new()
 }
 
-/// Opens Finder's Get Info window for `path`, or its Properties dialog on Windows.
+/// Opens Finder's Get Info window for `path`, or its Properties dialog on Windows
 pub fn get_info(path: &Path) {
     #[cfg(target_os = "macos")]
     {
@@ -190,17 +190,17 @@ pub fn get_info(path: &Path) {
     let _ = path;
 }
 
-/// The Full Disk Access pane of System Settings.
+/// The Full Disk Access pane of System Settings
 pub const FULL_DISK_ACCESS_SETTINGS: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
 /// Whether macOS lets this app read everywhere. Without Full Disk Access, Mail,
-/// Messages, Safari and other apps' data stay invisible to a scan.
+/// Messages, Safari and other apps' data stay invisible to a scan
 pub fn has_full_disk_access() -> bool {
     #[cfg(target_os = "macos")]
     {
         use std::io::ErrorKind;
-        // The privacy database itself is only readable with Full Disk Access.
+        // The privacy database itself is only readable with Full Disk Access
         match std::fs::File::open("/Library/Application Support/com.apple.TCC/TCC.db") {
             Ok(_) => true,
             Err(error) if error.kind() == ErrorKind::PermissionDenied => false,
@@ -217,7 +217,7 @@ pub fn has_full_disk_access() -> bool {
     }
 }
 
-/// Whether scanning `path` would reach into folders macOS guards without Full Disk Access.
+/// Whether scanning `path` would reach into folders macOS guards without Full Disk Access
 pub fn needs_full_disk_access(path: &Path) -> bool {
     cfg!(target_os = "macos")
         && std::env::var_os("HOME").is_some_and(|home| Path::new(&home).starts_with(path))

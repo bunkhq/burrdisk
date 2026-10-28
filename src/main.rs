@@ -1,4 +1,4 @@
-// Release builds on Windows are GUI apps, so no console window opens beside them.
+// Release builds on Windows are GUI apps, so no console window opens beside them
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
@@ -42,7 +42,7 @@ fn main() -> std::process::ExitCode {
                 KeyBinding::new("alt-right", GoForward, None),
             ]);
             // Quick Look is macOS only. Opening the hovered item instead would make
-            // Space launch programs on Windows.
+            // Space launch programs on Windows
             if cfg!(not(windows)) {
                 cx.bind_keys([KeyBinding::new("space", Preview, None)]);
             }
@@ -63,7 +63,7 @@ fn main() -> std::process::ExitCode {
                     .collect(),
             }]);
 
-            // Mona Sans, bundled so Burrdisk reads the same on every platform.
+            // Mona Sans, bundled so Burrdisk reads the same on every platform
             cx.text_system()
                 .add_fonts(assets::FONTS.iter().map(|font| std::borrow::Cow::Borrowed(*font)).collect())
                 .expect("bundled fonts load");
@@ -75,7 +75,7 @@ fn main() -> std::process::ExitCode {
                     window_min_size: Some(size(px(860.), px(600.))),
                     titlebar: Some(TitlebarOptions {
                         title: Some("Burrdisk".into()),
-                        // Burrdisk draws its own title bar; Windows gets drawn caption buttons.
+                        // Burrdisk draws its own title bar; Windows gets drawn caption buttons
                         appears_transparent: true,
                         traffic_light_position: Some(point(px(18.), px(20.))),
                     }),
@@ -83,7 +83,7 @@ fn main() -> std::process::ExitCode {
                     ..Default::default()
                 },
                 |window, cx| {
-                    // Text and spacing in rems follow the same scale as `ui::px` sizes.
+                    // Text and spacing in rems follow the same scale as `ui::px` sizes
                     window.set_rem_size(px(16.));
                     cx.new(|cx| Burrdisk::new(window, cx))
                 },

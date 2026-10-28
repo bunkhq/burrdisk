@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# One-time: a self-signed code signing certificate in the login keychain.
+# One-time: a self-signed code signing certificate in the login keychain
 if ! security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
     echo "Creating the \"$IDENTITY\" code signing certificate (one time)…"
     TMP=$(mktemp -d)
@@ -86,6 +86,6 @@ if [ "$GRANT" = 1 ]; then
     open "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
 fi
 
-# Quit a running copy so the new build takes over.
+# Quit a running copy so the new build takes over
 pkill -f "$APP/Contents/MacOS/burrdisk" 2>/dev/null || true
 open -n "$APP" --args "$@"

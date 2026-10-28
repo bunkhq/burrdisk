@@ -28,17 +28,17 @@ use crate::ui::components::{
 use crate::ui::fx;
 use crate::volumes;
 
-/// Rows listed in the sidebar before the rest are summarized.
+/// Rows listed in the sidebar before the rest are summarized
 const MAX_ROWS: usize = 200;
-/// Narrowest the sidebar can be dragged, and the least room it leaves the chart.
+/// Narrowest the sidebar can be dragged, and the least room it leaves the chart
 const SIDEBAR_MIN: f32 = 280.0;
 const CHART_MIN: f32 = 360.0;
 
-/// Drag payload for the sidebar's resize edge.
+/// Drag payload for the sidebar's resize edge
 #[derive(Clone)]
 struct SidebarResize;
 
-/// What follows the pointer while resizing: nothing.
+/// What follows the pointer while resizing: nothing
 struct NoPreview;
 
 impl Render for NoPreview {
@@ -46,10 +46,10 @@ impl Render for NoPreview {
         div()
     }
 }
-/// Rows that animate in when a folder opens; the rest appear immediately.
+/// Rows that animate in when a folder opens; the rest appear immediately
 const ANIMATED_ROWS: usize = 18;
 
-/// An item's chart color, drained toward gray once it sits in the Collector.
+/// An item's chart color, drained toward gray once it sits in the Collector
 fn row_color(explorer: &Explorer, id: NodeId) -> Hsla {
     let color = explorer
         .segment_color(id)
@@ -71,7 +71,7 @@ fn format_percent(ratio: f32) -> String {
 
 pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let full_disk_access = app.full_disk_access;
-    // Keep the chart some room however the window is sized.
+    // Keep the chart some room however the window is sized
     let sidebar_width =
         app.sidebar_width.min(f32::from(window.viewport_size().width) / crate::ui::UI_SCALE - CHART_MIN).max(SIDEBAR_MIN);
     let update = crate::ui::update::button_and_card(app, window, cx);
@@ -83,7 +83,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
     }
     let explorer = &*explorer;
     if explorer.notice.is_some() {
-        // Keeps the toast's fade-out moving.
+        // Keeps the toast's fade-out moving
         window.request_animation_frame();
     }
 
@@ -99,7 +99,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
             }
         }))
         .on_drag_move(cx.listener(|this, event: &gpui::DragMoveEvent<SidebarResize>, window, cx| {
-            // In design units, which `px` scales up on Windows.
+            // In design units, which `px` scales up on Windows
             let viewport = f32::from(window.viewport_size().width) / crate::ui::UI_SCALE;
             let width = viewport - f32::from(event.event.position.x) / crate::ui::UI_SCALE;
             this.sidebar_width = width.clamp(SIDEBAR_MIN, (viewport - CHART_MIN).max(SIDEBAR_MIN));
@@ -121,7 +121,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         .into_any_element()
 }
 
-/// Opens the right-click menu for `id` where the mouse went down.
+/// Opens the right-click menu for `id` where the mouse went down
 fn open_item_menu(this: &mut Burrdisk, id: NodeId, event: &MouseDownEvent, cx: &mut Context<Burrdisk>) {
     let Some(explorer) = this.explorer() else { return };
     if explorer.tree.node(id).kind == NodeKind::Hidden {
@@ -176,7 +176,7 @@ fn item_menu(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -
     }))
 }
 
-/// A pill floating above the tray with the result of the last Trash operation.
+/// A pill floating above the tray with the result of the last Trash operation
 fn toast(notice: Notice) -> AnyElement {
     let tone: Hsla = if notice.error { theme::danger().into() } else { gpui::hsla(0.40, 0.6, 0.55, 1.0) };
     let glyph = if notice.error { Icon::X } else { Icon::Trash };
@@ -218,7 +218,7 @@ fn toast(notice: Notice) -> AnyElement {
             ElementId::Name(format!("toast-{:?}", notice.shown).into()),
             Animation::new(Duration::from_millis(320)).with_easing(ease_out_quint()),
             move |el, t| {
-                // Fade back out over the last half second.
+                // Fade back out over the last half second
                 let out = (left / 0.5).clamp(0.0, 1.0);
                 el.opacity(t * out).mb(px(-12. * (1. - t)))
             },
@@ -228,7 +228,7 @@ fn toast(notice: Notice) -> AnyElement {
 
 fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let lineage = explorer.tree.lineage(explorer.focus);
-    // An opened file type continues the path past the folder: "Video › .mp4".
+    // An opened file type continues the path past the folder: "Video › .mp4"
     let groups: Vec<(u32, String)> = match (explorer.breakdown.as_deref(), explorer.group_focus) {
         (Some(breakdown), Some(g)) => {
             let mut chain = vec![g];
@@ -257,7 +257,7 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
         .border_color(theme::border())
         .window_control_area(WindowControlArea::Drag)
         // Keeps the root's focus-on-click from claiming presses here, which would stop
-        // Windows from moving (or, on double-click, maximizing) the window.
+        // Windows from moving (or, on double-click, maximizing) the window
         .occlude()
         .child(
             icon_button(
@@ -287,7 +287,7 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
                 .gap_0p5()
                 .overflow_hidden()
                 .child({
-                    // The root of every path: the disk list.
+                    // The root of every path: the disk list
                     let t = fx::hover("crumb-home");
                     div()
                         .id("crumb-home")
@@ -340,7 +340,7 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(explorer) = this.explorer() {
                                 match id {
-                                    // The open folder's own crumb closes any opened type.
+                                    // The open folder's own crumb closes any opened type
                                     Some(id) if id == explorer.focus => explorer.open_group(None),
                                     Some(id) => explorer.set_focus(id),
                                     None => explorer.open_group(group),
@@ -367,14 +367,14 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
         .when(cfg!(windows), |s| s.child(div().w(px(8.))).child(window_controls(window)))
 }
 
-/// Chart modes, as the switch in the titlebar names them.
+/// Chart modes, as the switch in the titlebar names them
 const MODES: [(ChartMode, &str); 3] = [
     (ChartMode::Size, "Size"),
     (ChartMode::Count, "File Count"),
     (ChartMode::Types, "File Types"),
 ];
 
-/// A segmented switch for what the chart's slices stand for.
+/// A segmented switch for what the chart's slices stand for
 fn mode_switch(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     div()
         .flex()
@@ -412,7 +412,7 @@ fn mode_switch(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElem
                         .child(fx::shine(t, gpui::white().opacity(0.34), px(7.)))
                 })
                 // Without this, Windows treats a press here as one on the titlebar's
-                // drag area and the click never arrives.
+                // drag area and the click never arrives
                 .occlude()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(explorer) = this.explorer() {
@@ -428,7 +428,7 @@ fn files(n: u64) -> String {
     if n == 1 { "1 file".into() } else { format!("{} files", format::count(n)) }
 }
 
-/// An item's figure in the current mode: how much space it takes, or how many files it holds.
+/// An item's figure in the current mode: how much space it takes, or how many files it holds
 fn figure(explorer: &Explorer, id: NodeId) -> String {
     let node = explorer.tree.node(id);
     match explorer.mode {
@@ -437,7 +437,7 @@ fn figure(explorer: &Explorer, id: NodeId) -> String {
     }
 }
 
-/// The icon for an item, by what kind of file it is.
+/// The icon for an item, by what kind of file it is
 fn item_icon(name: &str, kind: NodeKind) -> Icon {
     category_icon(filetype::category(name, kind))
 }
@@ -456,7 +456,7 @@ fn category_icon(category: Category) -> Icon {
     }
 }
 
-/// A breakdown group's own name: ".mp4 files" for an extension, "Video" for a category.
+/// A breakdown group's own name: ".mp4 files" for an extension, "Video" for a category
 fn group_name(breakdown: &Breakdown, g: u32) -> String {
     let group = breakdown.group(g);
     match group.parent {
@@ -484,7 +484,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         .collect();
     let (highlight, dim, center_hover) = hover_weights(explorer, &segments);
 
-    // What the center disc describes: the hovered item, or the folder in focus.
+    // What the center disc describes: the hovered item, or the folder in focus
     let breakdown = explorer.breakdown.as_deref();
     let (label_name, label_value, label_hint): (String, String, String) = match (explorer.hover, breakdown) {
         (Some(Hover::Target(Target::Node(id))), _) => {
@@ -527,7 +527,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         }
     };
     // The label lives inside the center disc, so it scales with the chart.
-    // Measured in window pixels, so it is brought back to design units for `px`.
+    // Measured in window pixels, so it is brought back to design units for `px`
     let inner =
         explorer.chart_bounds.get().map_or(80.0, |b| Geometry::new(b, rings).inner) / crate::ui::UI_SCALE;
     let center_width = inner * 1.55;
@@ -624,7 +624,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         explorer.set_focus(parent);
                     }
                 }
-                // File types open like folders; the files inside them don't.
+                // File types open like folders; the files inside them don't
                 Some(Hover::Target(Target::Group(g))) => explorer.open_group(Some(g)),
                 Some(Hover::Target(Target::Node(id))) if explorer.mode != ChartMode::Types => explorer.set_focus(id),
                 _ => return,
@@ -709,7 +709,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
 
 /// Per-segment highlight, background dim and center glow, cross-fading between the
 /// previous and current hover so moving across the chart feels continuous. A hovered
-/// slice lights up together with everything drawn outside it, within its span.
+/// slice lights up together with everything drawn outside it, within its span
 fn hover_weights(explorer: &Explorer, segments: &[Segment]) -> (Vec<f32>, f32, f32) {
     if explorer.zoom.is_some() || (explorer.hover.is_none() && explorer.prev_hover.is_none()) {
         return (Vec::new(), 0.0, 0.0);
@@ -746,7 +746,7 @@ fn hint_for(kind: NodeKind) -> &'static str {
     }
 }
 
-/// How many of a folder's children are folded into its "smaller items" slice, and their figure.
+/// How many of a folder's children are folded into its "smaller items" slice, and their figure
 fn smaller_summary(explorer: &Explorer, parent: NodeId) -> (usize, String) {
     let shown: Vec<NodeId> = explorer
         .segments
@@ -771,12 +771,12 @@ fn smaller_summary(explorer: &Explorer, parent: NodeId) -> (usize, String) {
     (rest.len(), value)
 }
 
-/// What a group's "smaller" slice holds: how many members, their size, and what to call them.
+/// What a group's "smaller" slice holds: how many members, their size, and what to call them
 fn group_rest(explorer: &Explorer, breakdown: &Breakdown, g: u32) -> (u64, u64, String) {
     let shown = |target: Target| explorer.segments.iter().any(|s| s.target == target);
     let group = breakdown.group(g);
     if group.groups.is_empty() {
-        // An extension: the files beyond its biggest few.
+        // An extension: the files beyond its biggest few
         let drawn: Vec<NodeId> = group.files.iter().copied().filter(|f| shown(Target::Node(*f))).collect();
         let size = group.size - drawn.iter().map(|f| explorer.tree.node(*f).size).sum::<u64>();
         let name = if group.name.starts_with('.') { format!("{} files", group.name) } else { "files".into() };
@@ -787,35 +787,35 @@ fn group_rest(explorer: &Explorer, breakdown: &Breakdown, g: u32) -> (u64, u64, 
     (rest.len() as u64, size, "file types".into())
 }
 
-/// One line of the sidebar list: a folder, file, file type or extension.
+/// One line of the sidebar list: a folder, file, file type or extension
 struct Row {
     key: (&'static str, usize),
     target: Target,
     name: String,
-    /// Shown faintly after the name, e.g. an extension's file type.
+    /// Shown faintly after the name, e.g. an extension's file type
     detail: Option<&'static str>,
     glyph: Icon,
-    /// Extension whose app icon stands in for `glyph`, once known.
+    /// Extension whose app icon stands in for `glyph`, once known
     app: Option<String>,
     color: Hsla,
-    /// Share of the listed whole, by the chart's measure.
+    /// Share of the listed whole, by the chart's measure
     ratio: f32,
     figure: String,
-    /// A real item, which can be opened, dragged and right-clicked.
+    /// A real item, which can be opened, dragged and right-clicked
     node: Option<NodeId>,
-    /// Clicking opens it in the chart.
+    /// Clicking opens it in the chart
     opens: bool,
     collected: bool,
     muted: bool,
 }
 
-/// Rows smaller than this share of the list are drawn as one compact line.
+/// Rows smaller than this share of the list are drawn as one compact line
 const COMPACT_RATIO: f32 = 0.001;
 
 fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: bool, cx: &mut Context<Burrdisk>) -> AnyElement {
     let Row { key, target, name, detail, glyph, app, color, ratio, figure, node, opens, collected, muted } = row;
     let app = app.and_then(|ext| appicon::for_extension(&ext, cx));
-    // A row stays lit while its right-click menu is open.
+    // A row stays lit while its right-click menu is open
     let is_hovered = explorer.hover == Some(Hover::Target(target))
         || node.is_some_and(|id| explorer.context.is_some_and(|(c, _)| c == id));
     let t = fx::track(key, is_hovered);
@@ -898,7 +898,7 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
     });
 
     let el = if compact {
-        // Crumbs: one short line, so a long tail of tiny items stays out of the way.
+        // Crumbs: one short line, so a long tail of tiny items stays out of the way
         base.gap_2p5()
             .h(px(26.))
             .pl(px(14.))
@@ -962,7 +962,7 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
     };
 
     // The first screenful cascades in each time the list changes.
-    // Peeking via the chart swaps lists often, so it uses a quicker, flatter fade.
+    // Peeking via the chart swaps lists often, so it uses a quicker, flatter fade
     if ix < ANIMATED_ROWS {
         let (step, length, rise) = if previewing { (0.012, 0.18, 4.0) } else { (0.024, 0.30, 10.0) };
         let delay = ix as f32 * step;
@@ -972,7 +972,7 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
             Animation::new(Duration::from_secs_f32(total)),
             move |el, t| {
                 let local = sunburst::ease_out_cubic(((t * total - delay) / length).clamp(0.0, 1.0));
-                // Collected rows settle at their dimmed opacity, not full.
+                // Collected rows settle at their dimmed opacity, not full
                 el.opacity(local * if collected { 0.4 } else { 1.0 }).top(px(rise * (1. - local)))
             },
         )
@@ -982,7 +982,7 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
     }
 }
 
-/// A file or folder row in the folder charts, or an item row in the type chart.
+/// A file or folder row in the folder charts, or an item row in the type chart
 fn node_row(explorer: &Explorer, id: NodeId, whole: u64, color: Hsla) -> Row {
     let node = explorer.tree.node(id);
     let types = explorer.mode == ChartMode::Types;
@@ -1016,7 +1016,7 @@ fn group_row(breakdown: &Breakdown, g: u32, whole: u64, detail: bool) -> Row {
         name: group.name.clone(),
         detail: detail.then(|| group.category.label()),
         glyph: category_icon(group.category),
-        // An extension's row shows the app that opens that kind of file.
+        // An extension's row shows the app that opens that kind of file
         app: (breakdown.level(g) == 1 && group.category != Category::Program)
             .then(|| group.name.strip_prefix('.').map(str::to_string))
             .flatten(),
@@ -1030,20 +1030,20 @@ fn group_row(breakdown: &Breakdown, g: u32, whole: u64, detail: bool) -> Row {
     }
 }
 
-/// What the sidebar lists, and how its header describes the whole.
+/// What the sidebar lists, and how its header describes the whole
 struct Listing {
     key: String,
     title: String,
     title_color: Hsla,
     title_icon: Icon,
-    /// The header's big figure, as number and unit.
+    /// The header's big figure, as number and unit
     figure: (String, String),
-    /// The header's secondary figure.
+    /// The header's secondary figure
     aside: String,
     rows: Vec<Row>,
-    /// Items beyond the listed rows.
+    /// Items beyond the listed rows
     remaining: usize,
-    /// A real folder the header acts on: collect it, reveal it.
+    /// A real folder the header acts on: collect it, reveal it
     folder: Option<NodeId>,
 }
 
@@ -1072,7 +1072,7 @@ fn folder_listing(explorer: &Explorer) -> Listing {
     Listing {
         key: format!("{listed}-{:?}", explorer.mode),
         title: node.name.to_string(),
-        // While peeking, the header folder takes the color of its slice in the chart.
+        // While peeking, the header folder takes the color of its slice in the chart
         title_color: if previewing { row_color(explorer, listed) } else { theme::text_muted().into() },
         title_icon: Icon::FolderOpen,
         figure,
@@ -1086,7 +1086,7 @@ fn folder_listing(explorer: &Explorer) -> Listing {
 fn type_listing(explorer: &Explorer, breakdown: &Breakdown) -> Listing {
     let focus = explorer.tree.node(explorer.focus);
     let Some(g) = explorer.group_preview.or(explorer.group_focus) else {
-        // Every extension in the folder, biggest first, each marked with its type.
+        // Every extension in the folder, biggest first, each marked with its type
         let mut exts: Vec<u32> = (0..breakdown.groups.len() as u32)
             .filter(|g| breakdown.group(*g).groups.is_empty() && *g != Breakdown::ROOT)
             .collect();
@@ -1140,7 +1140,7 @@ fn type_listing(explorer: &Explorer, breakdown: &Breakdown) -> Listing {
     }
 }
 
-/// The sidebar's left edge, which drags to resize it. A soft line shows on hover.
+/// The sidebar's left edge, which drags to resize it. A soft line shows on hover
 fn resize_edge() -> impl IntoElement {
     let t = fx::hover("sidebar-edge");
     div()
@@ -1171,7 +1171,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         listing;
     let hovered = explorer.hover;
 
-    // Composition strip: the biggest rows side by side, in their chart colors.
+    // Composition strip: the biggest rows side by side, in their chart colors
     let strip: Vec<AnyElement> = rows
         .iter()
         .take(14)
@@ -1216,7 +1216,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
             .child(footer_row("Scan time", format::duration(explorer.tree.duration)))
     });
 
-    // Without Full Disk Access, macOS hides whole app libraries from the scan.
+    // Without Full Disk Access, macOS hides whole app libraries from the scan
     let access_hint = at_root && !full_disk_access && volumes::needs_full_disk_access(&explorer.target.path);
 
     div()
@@ -1225,7 +1225,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         .relative()
         .flex_none()
         .w(px(width))
-        // Its contents truncate rather than holding it wider than dragged.
+        // Its contents truncate rather than holding it wider than dragged
         .min_w_0()
         .border_l_1()
         .border_color(theme::border())
@@ -1328,7 +1328,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         .children(footer)
 }
 
-/// Explains Hidden space and leads straight to the setting that shrinks it.
+/// Explains Hidden space and leads straight to the setting that shrinks it
 fn access_panel() -> impl IntoElement {
     let t = fx::hover("access-panel");
     div()
@@ -1363,7 +1363,7 @@ fn access_panel() -> impl IntoElement {
                 .child(
                     div()
                         .text_color(theme::text_muted())
-                        .child("macOS is hiding app data from the scan, so it piles up as Hidden space."),
+                        .child("macOS is hiding app data from the scan, so it piles up as Hidden space"),
                 )
                 .child(
                     div()
@@ -1385,20 +1385,20 @@ fn footer_row(label: &'static str, value: String) -> impl IntoElement {
 }
 
 /// An item's glyph: the icon of the app that opens it when one is known, else its
-/// type glyph in `tint`. Drained items lose the app icon's color too.
+/// type glyph in `tint`. Drained items lose the app icon's color too
 fn glyph(app: Option<Arc<RenderImage>>, fallback: Icon, size: f32, tint: Hsla, drained: bool) -> AnyElement {
     match app {
-        // App icons carry a little transparent margin, so they draw a touch larger.
+        // App icons carry a little transparent margin, so they draw a touch larger
         Some(image) => img(image).size(px(size + 2.)).flex_none().grayscale(drained).into_any_element(),
         None => icon(fallback, size, tint).into_any_element(),
     }
 }
 
-/// Height of a tile on the Collector's shelf; its width follows its name.
+/// Height of a tile on the Collector's shelf; its width follows its name
 const TILE_H: f32 = 58.;
-/// Names longer than this truncate.
+/// Names longer than this truncate
 const TILE_NAME_MAX: f32 = 168.;
-/// How far the shelf's edge fades reach.
+/// How far the shelf's edge fades reach
 const SHELF_FADE: f32 = 36.;
 
 fn shelf_tint(explorer: &Explorer, id: NodeId) -> Hsla {
@@ -1406,7 +1406,7 @@ fn shelf_tint(explorer: &Explorer, id: NodeId) -> Hsla {
     Hsla { l: (color.l + 0.12).min(0.9), ..color }
 }
 
-/// A tile's fill, lifting toward a brighter top as `t` goes to 1.
+/// A tile's fill, lifting toward a brighter top as `t` goes to 1
 fn tile_ground(t: f32) -> gpui::Background {
     linear_gradient(
         180.,
@@ -1415,7 +1415,7 @@ fn tile_ground(t: f32) -> gpui::Background {
     )
 }
 
-/// A shelf tile's face: its icon and size over its name.
+/// A shelf tile's face: its icon and size over its name
 fn face(glyph: AnyElement, size: u64, name: SharedString) -> gpui::Div {
     div()
         .relative()
@@ -1434,7 +1434,7 @@ fn face(glyph: AnyElement, size: u64, name: SharedString) -> gpui::Div {
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                // Leaves room for the X that shows on hover.
+                // Leaves room for the X that shows on hover
                 .mr(px(16.))
                 .child(glyph)
                 .child(
@@ -1451,17 +1451,17 @@ fn face(glyph: AnyElement, size: u64, name: SharedString) -> gpui::Div {
 
 fn tile_face(explorer: &Explorer, id: NodeId, cx: &mut gpui::App) -> gpui::Div {
     let node = explorer.tree.node(id);
-    // App icons keep their own colors; the fallback glyph takes the item's chart color.
+    // App icons keep their own colors; the fallback glyph takes the item's chart color
     let app = appicon::for_item(node.name, node.kind, cx);
     let glyph = glyph(app, item_icon(node.name, node.kind), 15.0, shelf_tint(explorer, id), false);
     face(glyph, node.size, node.name.to_string().into())
 }
 
 /// One collected item on the shelf. It can be picked up and dropped outside the
-/// tray to put it back, or onto another tile to move it there.
+/// tray to put it back, or onto another tile to move it there
 fn tile(explorer: &Explorer, id: NodeId, cx: &mut Context<Burrdisk>) -> AnyElement {
     if explorer.shelf_dragging() == Some(id) {
-        // Where the lifted tile came from, as wide as the tile.
+        // Where the lifted tile came from, as wide as the tile
         return div()
             .relative()
             .flex_none()
@@ -1534,13 +1534,13 @@ fn tile(explorer: &Explorer, id: NodeId, cx: &mut Context<Burrdisk>) -> AnyEleme
 }
 
 /// The row of tiles. It scrolls sideways with eased motion, and fades out at
-/// whichever edge has more beyond it.
+/// whichever edge has more beyond it
 fn shelf(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> AnyElement {
     let tiles: Vec<AnyElement> = explorer.collected.clone().into_iter().map(|id| tile(explorer, id, cx)).collect();
     let scroll = explorer.shelf_scroll;
     let room = explorer.shelf_room();
     // The fades are the tray's own ground, which darkens downward, so each is drawn
-    // as thin strips that match it top to bottom and thin out toward the tiles.
+    // as thin strips that match it top to bottom and thin out toward the tiles
     let inset = (80. - (TILE_H + 12.)) / 2. / 80.;
     let (top, bottom) = (fx::mix(theme::surface(), theme::bg(), inset), fx::mix(theme::surface(), theme::bg(), 1. - inset));
     let fade = |left: bool, amount: f32| {
@@ -1569,7 +1569,7 @@ fn shelf(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> AnyElement {
         .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _, cx| {
             if let Some(explorer) = this.explorer() {
                 let delta = event.delta.pixel_delta(px(48.));
-                // A plain wheel scrolls the shelf too.
+                // A plain wheel scrolls the shelf too
                 let step = if delta.x.abs() > delta.y.abs() { delta.x } else { delta.y };
                 explorer.scroll_shelf(-f32::from(step));
                 cx.notify();
@@ -1607,7 +1607,7 @@ fn shelf(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> AnyElement {
         .into_any_element()
 }
 
-/// A shelf tile in hand. Off the tray it says what letting go will do.
+/// A shelf tile in hand. Off the tray it says what letting go will do
 struct ShelfPreview {
     item: ShelfItem,
     tint: Hsla,
@@ -1617,7 +1617,7 @@ struct ShelfPreview {
 impl Render for ShelfPreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let over_tray = self.tray.get().is_some_and(|b| b.contains(&window.mouse_position()));
-        // The preview's origin is the tile's own corner, so it lifts from where it was.
+        // The preview's origin is the tile's own corner, so it lifts from where it was
         let item = &self.item.0;
         let app = appicon::for_item(&item.name, item.kind, cx);
         let glyph = glyph(app, item_icon(&item.name, item.kind), 15.0, self.tint, false);
@@ -1648,19 +1648,19 @@ impl Render for ShelfPreview {
     }
 }
 
-/// One line of the manifest: what's going, from where, and how it's doing.
+/// One line of the manifest: what's going, from where, and how it's doing
 struct ManifestLine {
     name: String,
     place: String,
     size: u64,
     kind: NodeKind,
     color: Option<Hsla>,
-    /// Absent during the countdown, before anything has started.
+    /// Absent during the countdown, before anything has started
     state: Option<u8>,
 }
 
 /// The list that rises above the tray once Move to Trash is pressed: everything that
-/// will go, while the countdown runs, then each item's progress as it moves.
+/// will go, while the countdown runs, then each item's progress as it moves
 fn manifest(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> Option<AnyElement> {
     let remaining = explorer
         .countdown
@@ -1703,7 +1703,7 @@ fn manifest(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> Option<AnyElemen
     if let Some(ix) = lines.iter().position(|l| l.state == Some(app::TRASH_MOVING)) {
         explorer.manifest_scroll.scroll_to_item(ix);
     }
-    // Seconds since start, for the spinner and the moving item's sweep.
+    // Seconds since start, for the spinner and the moving item's sweep
     let clock = explorer.revealed.elapsed().as_secs_f32();
 
     let (bar, figure): (AnyElement, String) = match (job, remaining) {
@@ -1822,7 +1822,7 @@ fn manifest(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> Option<AnyElemen
                         ),
                 )
                 .when(moving, |s| {
-                    // A single item gives no progress of its own, so it just sweeps.
+                    // A single item gives no progress of its own, so it just sweeps
                     let sweep = (clock * 0.9 + ix as f32 * 0.37).fract();
                     s.child(
                         div()
@@ -1860,7 +1860,7 @@ fn manifest(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> Option<AnyElemen
         })
         .collect();
 
-    // The list fades away once everything has moved.
+    // The list fades away once everything has moved
     let closing = job
         .and_then(|j| j.finished)
         .map_or(1., |at| 1. - ((at.elapsed().as_secs_f32() - 0.55) / 0.3).clamp(0., 1.));
@@ -1930,7 +1930,7 @@ fn manifest(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> Option<AnyElemen
     )
 }
 
-/// The checkmark green for things that went through.
+/// The checkmark green for things that went through
 const SUCCESS: Hsla = Hsla { h: 0.40, s: 0.6, l: 0.55, a: 1.0 };
 
 fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
@@ -1941,7 +1941,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let empty = count == 0 && !moving;
 
     let shelf = (!empty && !moving).then(|| shelf(explorer, cx));
-    // While moving: how far along, and what's going right now.
+    // While moving: how far along, and what's going right now
     let progress = job.map(|job| {
         let (done, _) = job.processed();
         let percent = (job.shown * 100.).round() as u32;
@@ -1950,7 +1950,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     });
 
     let (num, unit) = format::bytes_parts(total);
-    // 1 when the countdown starts, draining to 0 as the move begins.
+    // 1 when the countdown starts, draining to 0 as the move begins
     let remaining = explorer
         .countdown
         .map(|at| 1.0 - (at.elapsed().as_secs_f32() / TRASH_COUNTDOWN.as_secs_f32()).min(1.0));
@@ -2008,7 +2008,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
             }
         }))
         .on_drop(cx.listener(|this, item: &ShelfItem, _, cx| {
-            // Let go on the tray but not on a tile: it goes to the end of the shelf.
+            // Let go on the tray but not on a tile: it goes to the end of the shelf
             if let Some(explorer) = this.explorer() {
                 explorer.move_collected(item.0.id, None);
                 cx.notify();
@@ -2056,7 +2056,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                 })
                 .when_some(remaining.zip(seconds_left), |s, (remaining, left)| {
                     // The count gives way to the countdown: a ring draining around
-                    // the seconds left, each new number dropping into place.
+                    // the seconds left, each new number dropping into place
                     s.relative()
                         .bg(linear_gradient(
                             180.,
@@ -2100,7 +2100,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                     ElementId::Name(format!("badge-pop-{count}-{seconds_left:?}").into()),
                     Animation::new(Duration::from_millis(420)),
                     move |el, t| {
-                        // The halo flares each time the count changes, and on every second of a countdown.
+                        // The halo flares each time the count changes, and on every second of a countdown
                         let flare = (t * std::f32::consts::PI).sin() * (1. - t);
                         let tone = if remaining.is_some() { theme::danger() } else { theme::accent() };
                         if empty { el } else { el.shadow(glow(tone, 1.4 + flare * 3.0)) }
@@ -2128,7 +2128,7 @@ fn tray(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                             .text_color(theme::text_faint())
                             .whitespace_nowrap()
                             .truncate()
-                            .child(format!("Collect what you want gone, then move it all to the {} at once.", platform::TRASH)),
+                            .child(format!("Collect what you want gone, then move it all to the {} at once", platform::TRASH)),
                     ),
             )
         })
