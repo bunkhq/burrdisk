@@ -1,6 +1,6 @@
 //! Smooth hover states. GPUI's `.hover()` styles switch instantly, so elements that
 //! should ease in and out record their hover here and read back a 0..1 value
-//! while rendering. Everything runs on the UI thread, so the store is thread-local.
+//! while rendering. Everything runs on the UI thread, so the store is thread-local
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -35,13 +35,13 @@ thread_local! {
     static TWEENS: RefCell<HashMap<ElementId, Tween>> = RefCell::new(HashMap::new());
 }
 
-/// Current 0..1 hover amount for `key`.
+/// Current 0..1 hover amount for `key`
 pub fn hover(key: impl Into<ElementId>) -> f32 {
     let key = key.into();
     TWEENS.with(|t| t.borrow().get(&key).map_or(0.0, Tween::value))
 }
 
-/// Points `key` at `target`, starting from wherever it is now. Returns the current value.
+/// Points `key` at `target`, starting from wherever it is now. Returns the current value
 pub fn track(key: impl Into<ElementId>, target: bool) -> f32 {
     let key = key.into();
     TWEENS.with(|t| {
@@ -61,7 +61,7 @@ pub fn track(key: impl Into<ElementId>, target: bool) -> f32 {
     })
 }
 
-/// An `on_hover` handler that drives the tween for `key` and repaints.
+/// An `on_hover` handler that drives the tween for `key` and repaints
 pub fn on_hover(key: impl Into<ElementId>) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
     let key = key.into();
     move |hovered, window, _| {
@@ -71,7 +71,7 @@ pub fn on_hover(key: impl Into<ElementId>) -> impl Fn(&bool, &mut Window, &mut A
 }
 
 /// Whether any tween is still moving; the root view keeps requesting frames until not.
-/// Settled, un-hovered entries are dropped here.
+/// Settled, un-hovered entries are dropped here
 pub fn animating() -> bool {
     TWEENS.with(|t| {
         let mut map = t.borrow_mut();
@@ -82,7 +82,7 @@ pub fn animating() -> bool {
 
 pub fn mix(a: impl Into<Hsla>, b: impl Into<Hsla>, t: f32) -> Hsla {
     let (a, b) = (a.into(), b.into());
-    // Fully transparent ends take the other side's hue so fades don't shift color.
+    // Fully transparent ends take the other side's hue so fades don't shift color
     let a = if a.a == 0.0 { Hsla { a: 0.0, ..b } } else { a };
     let b = if b.a == 0.0 { Hsla { a: 0.0, ..a } } else { b };
     crate::sunburst::lerp_hsla(a, b, t)
@@ -91,7 +91,7 @@ pub fn mix(a: impl Into<Hsla>, b: impl Into<Hsla>, t: f32) -> Hsla {
 /// A soft light under the cursor, clipped to a control's rounded shape, like a key
 /// backlit from wherever the pointer rests. Add it as the control's first child, pass
 /// the control's hover amount and corner radius, and repaint on mouse moves with
-/// [`on_move`]. Off the control, the light waits at the nearest edge while it fades.
+/// [`on_move`]. Off the control, the light waits at the nearest edge while it fades
 pub fn shine(t: f32, color: impl Into<Hsla>, radius: gpui::Pixels) -> impl gpui::IntoElement {
     use gpui::{BoxShadow, Bounds, ContentMask, Corners, Styled, canvas, point, px, size};
     let color = color.into();
@@ -108,7 +108,7 @@ pub fn shine(t: f32, color: impl Into<Hsla>, radius: gpui::Pixels) -> impl gpui:
             );
             // A round light wider than a button is tall. GPUI's blur radius is the
             // Gaussian's sigma, so this peaks near two thirds of `color`'s alpha under
-            // the cursor, half that 25px away, and a fifth at 40px.
+            // the cursor, half that 25px away, and a fifth at 40px
             let spot = crate::ui::px(52.);
             let glow = [BoxShadow {
                 color: color.opacity(color.a * t),
@@ -117,7 +117,7 @@ pub fn shine(t: f32, color: impl Into<Hsla>, radius: gpui::Pixels) -> impl gpui:
                 spread_radius: px(0.),
             }];
             // Content masks are square, so the rounded corners are traced in one-pixel
-            // rows; the rest of the control is a single band.
+            // rows; the rest of the control is a single band
             let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
             let r = f32::from(radius).min(w / 2.).min(h / 2.).max(0.);
             let rows = r.ceil() as usize;
@@ -154,7 +154,7 @@ pub fn shine(t: f32, color: impl Into<Hsla>, radius: gpui::Pixels) -> impl gpui:
     .size_full()
 }
 
-/// A mouse-move handler that repaints, so a [`shine`] keeps up with the cursor.
+/// A mouse-move handler that repaints, so a [`shine`] keeps up with the cursor
 pub fn on_move(_: &gpui::MouseMoveEvent, window: &mut Window, _: &mut App) {
     window.refresh();
 }

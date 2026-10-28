@@ -8,7 +8,7 @@
 //! when it is compressed, sparse or a cloud placeholder; hard links count once per
 //! name; symlinks and junctions are not entered. The one difference is files compressed
 //! by Windows itself (the "Compact OS" kind), which a folder listing hides the marks of:
-//! the walk counts their full length, this counts what they take on disk.
+//! the walk counts their full length, this counts what they take on disk
 
 use std::fs::File;
 use std::io;
@@ -21,16 +21,16 @@ use super::{Child, Dir, Progress, Tree, flatten};
 
 pub enum Failure {
     Cancelled,
-    /// The volume can't be read this way; scan it the ordinary way.
+    /// The volume can't be read this way; scan it the ordinary way
     Unsupported,
 }
 
-/// Records handled per task: about 8 MB of file table at the usual 1 KB a record.
+/// Records handled per task: about 8 MB of file table at the usual 1 KB a record
 const CHUNK: usize = 8192;
 
 const ROOT_RECORD: u32 = 5;
 /// Records below this are NTFS's own bookkeeping files ($MFT, $LogFile, ...), which a
-/// folder listing never shows.
+/// folder listing never shows
 const FIRST_USER_RECORD: u32 = 24;
 const REF_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 
@@ -43,23 +43,23 @@ const END: u32 = 0xFFFF_FFFF;
 const NAMESPACE_DOS: u8 = 2;
 const ATTR_COMPRESSED: u16 = 0x0001;
 const ATTR_SPARSE: u16 = 0x8000;
-/// The reparse point bit of a name's file flags.
+/// The reparse point bit of a name's file flags
 const ATTR_REPARSE: u32 = 0x400;
 const REPARSE_SYMLINK: u32 = 0xA000_000C;
 const REPARSE_MOUNT_POINT: u32 = 0xA000_0003;
 /// Windows' own file compression keeps a file's data in a stream of this name, leaving the
-/// main one empty.
+/// main one empty
 const REPARSE_WOF: u32 = 0x8000_0017;
 const WOF_STREAM: &str = "WofCompressedData";
 /// File attributes whose real size on disk differs from the file's length: the same
-/// set the walk asks NTFS about.
+/// set the walk asks NTFS about
 const SPECIAL_ATTRIBUTES: u32 = 0x0800 // compressed
     | 0x1000 // offline
     | 0x0200 // sparse
     | 0x0004_0000 // recall on open
     | 0x0040_0000; // recall on data access
 
-// Per-record flags.
+// Per-record flags
 const IN_USE: u8 = 1;
 const DIR: u8 = 2;
 const SPECIAL: u8 = 4;
@@ -85,7 +85,7 @@ fn u64at(bytes: &[u8], at: usize) -> u64 {
 }
 
 /// Reads that bypass the file cache, which is what lets a volume be read at the speed
-/// of the drive; they need their buffers aligned to the sector size.
+/// of the drive; they need their buffers aligned to the sector size
 fn open_unbuffered(device: &str) -> Option<File> {
     use std::os::windows::fs::OpenOptionsExt;
     const FILE_FLAG_NO_BUFFERING: u32 = 0x2000_0000;
@@ -97,7 +97,7 @@ struct Aligned {
     layout: std::alloc::Layout,
 }
 
-// The buffer is owned outright and only ever used by one thread at a time.
+// The buffer is owned outright and only ever used by one thread at a time
 unsafe impl Send for Aligned {}
 
 impl Aligned {
@@ -121,7 +121,7 @@ impl Drop for Aligned {
     }
 }
 
-/// A stretch of the file table's data: where it sits in the table and on the volume.
+/// A stretch of the file table's data: where it sits in the table and on the volume
 struct Extent {
     start: u64,
     disk: u64,
@@ -170,7 +170,7 @@ fn read_at(vol: &File, mut buf: &mut [u8], mut offset: u64) -> io::Result<()> {
     Ok(())
 }
 
-/// Reads the file table's bytes `[offset, offset + buf.len())`, which may span extents.
+/// Reads the file table's bytes `[offset, offset + buf.len())`, which may span extents
 fn read_table(vol: &File, extents: &[Extent], offset: u64, buf: &mut [u8]) -> io::Result<()> {
     let mut done = 0;
     while done < buf.len() {
@@ -185,7 +185,7 @@ fn read_table(vol: &File, extents: &[Extent], offset: u64, buf: &mut [u8]) -> io
 }
 
 /// Decodes an attribute's data runs: (length, signed offset from the previous run)
-/// pairs of variable-width little-endian numbers.
+/// pairs of variable-width little-endian numbers
 fn parse_runs(mut runs: &[u8], cluster: u64) -> Option<Vec<Extent>> {
     let mut extents = Vec::new();
     let (mut lcn, mut start) = (0i64, 0u64);
@@ -194,7 +194,7 @@ fn parse_runs(mut runs: &[u8], cluster: u64) -> Option<Vec<Extent>> {
             break;
         }
         let (len_size, off_size) = ((header & 0xF) as usize, (header >> 4) as usize);
-        // The file table is never sparse, so a run must say where it is.
+        // The file table is never sparse, so a run must say where it is
         if len_size == 0 || len_size > 8 || off_size == 0 || off_size > 8 || rest.len() < len_size + off_size {
             return None;
         }
@@ -213,7 +213,7 @@ fn parse_runs(mut runs: &[u8], cluster: u64) -> Option<Vec<Extent>> {
 
 /// Undoes NTFS's torn-write protection: the last two bytes of each 512-byte sector
 /// hold a check value, with the real bytes kept in the record's header. A record that
-/// fails the check is unusable.
+/// fails the check is unusable
 fn fix_up(rec: &mut [u8]) -> bool {
     if &rec[..4] != b"FILE" {
         return false;
@@ -262,7 +262,7 @@ impl Attr<'_> {
         })
     }
 
-    /// What a stream occupies on disk.
+    /// What a stream occupies on disk
     fn allocated(&self) -> Option<u64> {
         if !self.non_resident() {
             return Some(u64::from(u32at(self.bytes, 0x10)));
@@ -270,7 +270,7 @@ impl Attr<'_> {
         (u64at(self.bytes, 0x10) == 0).then(|| u64at(self.bytes, 0x28))
     }
 
-    /// A data attribute's length, and what it occupies if it is compressed or sparse.
+    /// A data attribute's length, and what it occupies if it is compressed or sparse
     fn data_size(&self) -> Option<(u64, u64)> {
         if !self.non_resident() {
             return Some((u64::from(u32at(self.bytes, 0x10)), NO_PACKED));
@@ -306,7 +306,7 @@ fn attributes(rec: &[u8]) -> impl Iterator<Item = Attr<'_>> {
     })
 }
 
-/// A name of a record in a folder.
+/// A name of a record in a folder
 struct Name {
     parent: u32,
     record: u32,
@@ -316,7 +316,7 @@ struct Name {
 
 /// Data attributes found in extension records: pieces of a file whose attributes
 /// overflowed its own record. `wof` marks the stream holding system-compressed data,
-/// whose `real` is what it occupies.
+/// whose `real` is what it occupies
 struct Extra {
     base: u32,
     real: u64,
@@ -336,7 +336,7 @@ impl Part {
         let len = usize::from(*value.get(0x40).unwrap_or(&0));
         let Some(chars) = value.get(0x42..0x42 + len * 2) else { return };
         let Ok(parent) = u32::try_from(u64at(value, 0) & REF_MASK) else { return };
-        // The short 8.3 name of a file is a second name for the same link.
+        // The short 8.3 name of a file is a second name for the same link
         if len == 0 || value[0x41] == NAMESPACE_DOS {
             return;
         }
@@ -352,7 +352,7 @@ fn pick(flags: u8, real: u64, packed: u64) -> u64 {
 }
 
 /// Reads one record of the file table into its slot of `sizes` and `flags`, and its
-/// names into `part`.
+/// names into `part`
 fn parse_record(rec: &mut [u8], number: u32, size: &mut u64, flags: &mut u8, part: &mut Part) {
     if !fix_up(rec) {
         return;
@@ -374,7 +374,7 @@ fn parse_record(rec: &mut [u8], number: u32, size: &mut u64, flags: &mut u8, par
                 if let Some(value) = attr.value() {
                     part.add_name(value, owner);
                     // A file with many names pushes its reparse attribute into another
-                    // record, but each name keeps a copy of the tag.
+                    // record, but each name keeps a copy of the tag
                     if u32at(value, 0x38) & ATTR_REPARSE != 0 {
                         name_tag = u32at(value, 0x3C);
                     }
@@ -438,7 +438,7 @@ pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Result<Tree
         *current = "Reading the file table".to_string();
     }
 
-    // The table describes itself in its first record.
+    // The table describes itself in its first record
     let mut first = vec![0u8; record];
     read_at(&vol, &mut first, mft_lcn * cluster).map_err(|_| Failure::Unsupported)?;
     if !fix_up(&mut first) {
@@ -451,7 +451,7 @@ pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Result<Tree
             Some((parse_runs(a.bytes.get(at..)?, cluster)?, u64at(a.bytes, 0x30)))
         })
         .ok_or(Failure::Unsupported)?;
-    // A table fragmented enough to need extension records for its own runs isn't handled.
+    // A table fragmented enough to need extension records for its own runs isn't handled
     let mapped: u64 = extents.iter().map(|e| e.len).sum();
     let records = usize::try_from(table_len / record as u64).map_err(|_| Failure::Unsupported)?;
     if mapped < table_len || records <= FIRST_USER_RECORD as usize || u32::try_from(records).is_err() {
@@ -460,7 +460,7 @@ pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Result<Tree
 
     // One thread reads the table front to back, because the drive is fastest that way
     // and slows to a crawl when several readers interleave; a second parses what it
-    // has read while the next chunk comes in.
+    // has read while the next chunk comes in
     const BUFFERS: usize = 6;
     let (full_tx, full_rx) = std::sync::mpsc::sync_channel::<(usize, Aligned)>(BUFFERS);
     let (free_tx, free_rx) = std::sync::mpsc::channel::<Aligned>();
@@ -532,7 +532,7 @@ pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Result<Tree
     }
 
     // Group the names by folder, skipping those of bookkeeping files and of records
-    // that aren't in use.
+    // that aren't in use
     let kept = |n: &Name| {
         n.record >= FIRST_USER_RECORD
             && (n.parent as usize) < records
@@ -582,7 +582,7 @@ impl Table<'_> {
             let name = &self.names[ix as usize];
             let record = name.record as usize;
             let is_dir = self.flags[record] & DIR != 0;
-            // A folder reached twice means a damaged table; keep it where it was first met.
+            // A folder reached twice means a damaged table; keep it where it was first met
             if is_dir && std::mem::replace(&mut entered[record], true) {
                 continue;
             }
@@ -609,7 +609,7 @@ mod tests {
 
     #[test]
     fn decodes_data_runs() {
-        // 0x20 clusters at LCN 0x100, then 0x10 more 0x40 clusters back.
+        // 0x20 clusters at LCN 0x100, then 0x10 more 0x40 clusters back
         let runs = [0x21, 0x20, 0x00, 0x01, 0x21, 0x10, 0xC0, 0xFF, 0x00];
         let extents = parse_runs(&runs, 4096).unwrap();
         assert_eq!(extents.len(), 2);
@@ -647,7 +647,7 @@ mod tests {
     /// Needs an elevated shell: compares the file-table scan with the walk of C:. The two
     /// differ by what the walk can't read (System Volume Information), by files that
     /// changed in between, and by Windows-compressed files, which the walk can only
-    /// count at their uncompressed length.
+    /// count at their uncompressed length
     #[test]
     #[ignore]
     fn matches_the_walk() {

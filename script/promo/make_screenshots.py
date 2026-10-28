@@ -19,9 +19,9 @@ from make_cover_alt import (  # noqa: E402
 )
 
 OUT = Path(__file__).resolve().parents[2] / "assets" / "screenshots"
-# Room around the window: its shadow falls 30px down and spreads about as far.
+# Room around the window: its shadow falls 30px down and spreads about as far
 SIDE, TOP, BOTTOM = 56, 40, 100
-# Sunburst hole and ring width that keep all three rings inside the window.
+# Sunburst hole and ring width that keep all three rings inside the window
 CHART = (74, 64)
 
 ICONS.update({

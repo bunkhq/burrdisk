@@ -9,11 +9,11 @@ use std::borrow::Cow;
 use crate::filetype::{Breakdown, Category};
 use crate::scan::{NodeId, NodeKind, Tree};
 
-/// Rings drawn beyond the center disc.
+/// Rings drawn beyond the center disc
 pub const RINGS: usize = 5;
-/// Rings in the file type chart: type, extension, files.
+/// Rings in the file type chart: type, extension, files
 pub const TYPE_RINGS: usize = 3;
-/// Segments thinner than this (in turns) are folded into "smaller objects".
+/// Segments thinner than this (in turns) are folded into "smaller objects"
 const MIN_SPAN: f32 = 0.004;
 const CENTER_RATIO: f32 = 0.27;
 
@@ -23,15 +23,15 @@ pub const REVEAL_DURATION: Duration = Duration::from_millis(900);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
     Node(NodeId),
-    /// Aggregate of children too small to draw, keyed by their parent.
+    /// Aggregate of children too small to draw, keyed by their parent
     Smaller(NodeId),
-    /// A file type or extension in the file type breakdown.
+    /// A file type or extension in the file type breakdown
     Group(u32),
-    /// Members of a breakdown group too small to draw.
+    /// Members of a breakdown group too small to draw
     GroupRest(u32),
 }
 
-/// What a folder's slices are sized by.
+/// What a folder's slices are sized by
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Measure {
     Size,
@@ -47,7 +47,7 @@ impl Measure {
         }
     }
 
-    /// A folder's children, largest first by this measure.
+    /// A folder's children, largest first by this measure
     fn children<'a>(self, tree: &'a Tree, id: NodeId) -> Cow<'a, [NodeId]> {
         let children = tree.node(id).children;
         match self {
@@ -65,11 +65,11 @@ impl Measure {
 pub struct Segment {
     pub target: Target,
     pub depth: usize,
-    /// Angles in turns, clockwise from 12 o'clock.
+    /// Angles in turns, clockwise from 12 o'clock
     pub start: f32,
     pub end: f32,
     pub color: Hsla,
-    /// Color this segment takes once a zoom settles. Equal to `color` outside a zoom.
+    /// Color this segment takes once a zoom settles. Equal to `color` outside a zoom
     pub alt: Hsla,
 }
 
@@ -107,13 +107,13 @@ pub fn layout(tree: &Tree, focus: NodeId, measure: Measure) -> Vec<Segment> {
 
 /// An animated move between a folder and one of its descendants. Both views are
 /// laid out in the ancestor's coordinates; the camera then slides between them, so
-/// the chosen slice opens up into the full circle (or folds back into its parent).
+/// the chosen slice opens up into the full circle (or folds back into its parent)
 pub struct Zoom {
     pub segments: Rc<Vec<Segment>>,
-    /// Span of the descendant in the ancestor's view.
+    /// Span of the descendant in the ancestor's view
     a: f32,
     b: f32,
-    /// How many rings the descendant sits below the ancestor.
+    /// How many rings the descendant sits below the ancestor
     k: f32,
     zoom_in: bool,
     started: Instant,
@@ -174,11 +174,11 @@ impl Zoom {
 
 struct ZoomCx {
     inner: NodeId,
-    /// Nodes from just below the base down to `inner`; never folded away.
+    /// Nodes from just below the base down to `inner`; never folded away
     path: Vec<NodeId>,
     extra: usize,
     span: Option<(f32, f32)>,
-    /// Hue origin of the descendant's own view.
+    /// Hue origin of the descendant's own view
     origin: f32,
 }
 
@@ -192,7 +192,7 @@ struct LayoutCx<'a> {
 
 impl LayoutCx<'_> {
     /// `inside` marks the zoomed folder's subtree, which is drawn deeper and with
-    /// a finer fold threshold so it matches that folder's own layout exactly.
+    /// a finer fold threshold so it matches that folder's own layout exactly
     fn lay_children(&mut self, parent: NodeId, depth: usize, start: f32, end: f32, min_span: f32, inside: bool) {
         let tree = self.tree;
         let measure = self.measure;
@@ -276,7 +276,7 @@ fn smaller_color(depth: usize) -> Hsla {
 }
 
 /// Puts the middle of a folder's largest child at the start of the hue wheel, so
-/// the biggest thing on screen always wears the brand orange.
+/// the biggest thing on screen always wears the brand orange
 fn hue_origin(tree: &Tree, focus: NodeId, measure: Measure) -> f32 {
     let total = measure.of(tree, focus);
     match measure.children(tree, focus).first() {
@@ -285,7 +285,7 @@ fn hue_origin(tree: &Tree, focus: NodeId, measure: Measure) -> f32 {
     }
 }
 
-/// Each file type keeps one hue wherever it appears, so video always reads as video.
+/// Each file type keeps one hue wherever it appears, so video always reads as video
 fn category_hue(category: Category) -> f32 {
     match category {
         Category::Document | Category::Folder => 52.0,
@@ -299,7 +299,7 @@ fn category_hue(category: Category) -> f32 {
 }
 
 /// The file type chart's colors: a category at full strength, its extensions fanned
-/// a little around the category's hue (`spread` -0.5..0.5), files quieter still.
+/// a little around the category's hue (`spread` -0.5..0.5), files quieter still
 pub fn type_color(category: Category, depth: usize, spread: f32) -> Hsla {
     if category == Category::Hidden {
         return color_for(NodeKind::Hidden, 0.0, 0);
@@ -315,7 +315,7 @@ pub fn type_color(category: Category, depth: usize, spread: f32) -> Hsla {
 
 /// The file type chart, opened at group `root`: from the whole folder that is
 /// categories, then their extensions, then the biggest items of each; from a
-/// category, its extensions and their items; from an extension, its items.
+/// category, its extensions and their items; from an extension, its items
 pub fn layout_types(tree: &Tree, breakdown: &Breakdown, root: u32) -> Vec<Segment> {
     let group = breakdown.group(root);
     let hidden = (root == Breakdown::ROOT)
@@ -338,7 +338,7 @@ pub fn layout_types(tree: &Tree, breakdown: &Breakdown, root: u32) -> Vec<Segmen
     out
 }
 
-/// Lays out one ring of the type chart between `start` and `end`, recursing into groups.
+/// Lays out one ring of the type chart between `start` and `end`, recursing into groups
 #[allow(clippy::too_many_arguments)]
 fn lay_type_entries(
     tree: &Tree,
@@ -383,7 +383,7 @@ fn lay_type_entries(
         }
         cursor = b;
     }
-    // Files beyond the biggest few kept per extension also land in "smaller".
+    // Files beyond the biggest few kept per extension also land in "smaller"
     let listed: u64 = entries.iter().map(|(size, _)| size).sum();
     let rest = rest + total.saturating_sub(listed);
     let rest_span = span * rest as f32 / total.max(1) as f32;
@@ -395,7 +395,7 @@ fn lay_type_entries(
 
 /// Hue follows the position around the circle so a folder and its contents share a
 /// family of colors; deeper rings and plain files are quieter. Colors are picked in
-/// OKLCH so every hue reads equally bright, with no muddy olives or neon greens.
+/// OKLCH so every hue reads equally bright, with no muddy olives or neon greens
 pub fn color_for(kind: NodeKind, position: f32, depth: usize) -> Hsla {
     let hue = (52.0 + position * 300.0).rem_euclid(360.0);
     let d = depth as f32;
@@ -406,7 +406,7 @@ pub fn color_for(kind: NodeKind, position: f32, depth: usize) -> Hsla {
     }
 }
 
-/// OKLCH (lightness 0..1, chroma, hue in degrees) to an sRGB color.
+/// OKLCH (lightness 0..1, chroma, hue in degrees) to an sRGB color
 pub fn oklch(l: f32, c: f32, h: f32) -> Hsla {
     let (a, b) = (c * h.to_radians().cos(), c * h.to_radians().sin());
     let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
@@ -441,15 +441,15 @@ pub fn hit_test(segments: &[Segment], geometry: &Geometry, position: Point<Pixel
 }
 
 /// Where the camera sits: which slice of the angle range fills the circle, how
-/// many rings it has moved inward, and how far the entrance sweep has got.
+/// many rings it has moved inward, and how far the entrance sweep has got
 #[derive(Clone, Copy, Debug)]
 pub struct View {
     pub lo: f32,
     pub hi: f32,
     pub shift: f32,
-    /// 0 uses `Segment::color`, 1 uses `Segment::alt`.
+    /// 0 uses `Segment::color`, 1 uses `Segment::alt`
     pub mix: f32,
-    /// 0..1 entrance sweep after a scan finishes.
+    /// 0..1 entrance sweep after a scan finishes
     pub reveal: f32,
 }
 
@@ -466,13 +466,13 @@ impl View {
 
 pub struct PaintState {
     pub view: View,
-    /// Per segment, 0..1: how strongly it belongs to the hovered item.
+    /// Per segment, 0..1: how strongly it belongs to the hovered item
     pub highlight: Vec<f32>,
-    /// 0..1: how much everything outside the hovered item recedes.
+    /// 0..1: how much everything outside the hovered item recedes
     pub dim: f32,
-    /// Segments already collected for deletion are drawn faded out.
+    /// Segments already collected for deletion are drawn faded out
     pub collected: Vec<bool>,
-    /// 0..1 hover glow on the center disc.
+    /// 0..1 hover glow on the center disc
     pub center_hover: f32,
     pub center_tint: Hsla,
     pub rings: usize,
@@ -483,7 +483,7 @@ pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, w
     let view = state.view;
     let width = (view.hi - view.lo).max(1e-6);
 
-    // Center disc, tinted by the folder in focus.
+    // Center disc, tinted by the folder in focus
     let mut disc = lerp_hsla(gpui::hsla(0.07, 0.06, 0.13, 1.0), state.center_tint, 0.10 + 0.10 * state.center_hover);
     disc.a = 1.0;
     let disc_r = (geometry.inner - 4.0) * (0.9 + 0.1 * ease_out_cubic(view.reveal));
@@ -492,7 +492,7 @@ pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, w
     rim.a = 0.18 + 0.32 * state.center_hover;
     ribbon(window, geometry.center, disc_r - 1.5, disc_r, 0.0, 1.0, |_| rim);
 
-    // Highlighted segments go last so their glow sits on top of neighbours.
+    // Highlighted segments go last so their glow sits on top of neighbours
     for pass in 0..2 {
         for (ix, segment) in segments.iter().enumerate() {
             let highlight = state.highlight.get(ix).copied().unwrap_or(0.0);
@@ -501,7 +501,7 @@ pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, w
             }
             let rel = segment.depth as f32 - view.shift;
             let fade = (1.0 + rel).clamp(0.0, 1.0) * (geometry.rings as f32 - rel).clamp(0.0, 1.0);
-            // Rings sweep in clockwise, each a beat after the one inside it.
+            // Rings sweep in clockwise, each a beat after the one inside it
             let local = ease_out_cubic((view.reveal * 1.45 - segment.depth as f32 * 0.09).clamp(0.0, 1.0));
             if fade <= 0.0 || local <= 0.0 {
                 continue;
@@ -522,7 +522,7 @@ pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, w
             let mut alpha = fade * (0.35 + 0.65 * local);
             alpha *= 1.0 - 0.5 * state.dim * (1.0 - highlight);
             if state.collected.get(ix).copied().unwrap_or(false) {
-                // Collected items drain to gray, so the chart shows what's leaving.
+                // Collected items drain to gray, so the chart shows what's leaving
                 color.s *= 0.12;
                 color.l *= 0.85;
                 alpha *= 0.35;
@@ -535,7 +535,7 @@ pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, w
                 annular_sector(window, geometry.center, r0 - 2.0, r1 + 5.0, start, end, glow);
             }
             annular_sector(window, geometry.center, r0 + 1.0, r1 - 1.0, start, end, color);
-            // A lighter lip along the outer edge gives each ring a little depth.
+            // A lighter lip along the outer edge gives each ring a little depth
             let mut lip = color;
             lip.l = (lip.l + 0.10).min(0.95);
             lip.a *= 0.55;
@@ -553,7 +553,7 @@ fn annular_sector(
     end: f32,
     color: Hsla,
 ) {
-    // A constant ~1.5px gap between neighbours, independent of radius.
+    // A constant ~1.5px gap between neighbours, independent of radius
     let gap_outer = (0.75 / r1) / TAU;
     let gap_inner = (0.75 / r0.max(1.0)) / TAU;
     let full = end - start >= 0.999;
@@ -586,7 +586,7 @@ fn annular_sector(
 }
 
 /// An arc from `start` to `end` (in turns) whose color can vary along its length.
-/// `color_at` receives 0..1 along the arc.
+/// `color_at` receives 0..1 along the arc
 fn ribbon(
     window: &mut Window,
     center: Point<Pixels>,
@@ -608,7 +608,7 @@ fn ribbon(
     let pieces = if uniform { 1 } else { (((end - start) * 96.0).ceil() as usize).max(2) };
     for p in 0..pieces {
         let s = start + (end - start) * p as f32 / pieces as f32;
-        // Overlap a hair so seams between pieces don't show.
+        // Overlap a hair so seams between pieces don't show
         let e = (start + (end - start) * (p + 1) as f32 / pieces as f32 + if p + 1 < pieces { 0.0015 } else { 0.0 }).min(end);
         let color = color_at((p as f32 + 0.5) / pieces as f32);
         let n = (((e - s) * 360.0).ceil() as usize).max(2);
@@ -634,7 +634,7 @@ fn dot(window: &mut Window, center: Point<Pixels>, r: f32, turn: f32, radius: f3
 }
 
 /// A ring track with a highlighted arc from `start` to `end` (in turns). With
-/// `tail`, the arc fades in from transparent like a comet.
+/// `tail`, the arc fades in from transparent like a comet
 pub fn paint_arc(window: &mut Window, bounds: Bounds<Pixels>, start: f32, end: f32, thickness: f32, fill: Hsla, track: Hsla, tail: bool) {
     let center = bounds.center();
     let r1 = f32::from(bounds.size.width.min(bounds.size.height)) / 2.0 - 8.0;
@@ -645,7 +645,7 @@ pub fn paint_arc(window: &mut Window, bounds: Bounds<Pixels>, start: f32, end: f
         let mut c = fill;
         if tail {
             // Fade into the track with opaque colors; translucent pieces would
-            // double up where they overlap and show as stripes.
+            // double up where they overlap and show as stripes
             let track_on_bg = Hsla { h: fill.h, s: 0.03, l: 0.153, a: 1.0 };
             c = lerp_hsla(track_on_bg, fill, u * u);
         } else {
@@ -663,18 +663,18 @@ pub fn paint_arc(window: &mut Window, bounds: Bounds<Pixels>, start: f32, end: f
     dot(window, center, mid, end, thickness / 2.0, color_at(1.0));
 }
 
-/// One spine of a burr: a tapered spike standing out from the seed core.
+/// One spine of a burr: a tapered spike standing out from the seed core
 #[derive(Clone, Copy, Debug)]
 pub struct Spine {
-    /// Angle of the spine's axis, in turns clockwise from 12 o'clock.
+    /// Angle of the spine's axis, in turns clockwise from 12 o'clock
     pub at: f32,
-    /// Length as a fraction of the room between the core and the edge.
+    /// Length as a fraction of the room between the core and the edge
     pub len: f32,
     pub color: Hsla,
 }
 
 /// Paints a burr: a round seed core with spines radiating out of it. `grow` (0..1)
-/// draws the spines out from the core, sweeping clockwise; `bristle` stretches them.
+/// draws the spines out from the core, sweeping clockwise; `bristle` stretches them
 pub fn paint_burr(
     window: &mut Window,
     bounds: Bounds<Pixels>,
@@ -692,7 +692,7 @@ pub fn paint_burr(
         let a = turn * TAU;
         point(center.x + px(r * a.sin()), center.y - px(r * a.cos()))
     };
-    // Bases are a share of the gap between neighbors, so busy burrs stay crisp.
+    // Bases are a share of the gap between neighbors, so busy burrs stay crisp
     let base_turns = (0.55 / spines.len().max(12) as f32).min(0.03);
     let base_half = (base_turns * TAU * r0 / 2.0).clamp(0.9, 4.0);
     for spine in spines {
@@ -705,7 +705,7 @@ pub fn paint_burr(
         let a = spine.at * TAU;
         let (dir_x, dir_y) = (a.sin(), -a.cos());
         let (n_x, n_y) = (-dir_y, dir_x);
-        // Start inside the core so the spine looks rooted, not glued on.
+        // Start inside the core so the spine looks rooted, not glued on
         let root = r0 - 2.0;
         let tip = r0 + len;
         let tip_half = 0.45;
@@ -724,7 +724,7 @@ pub fn paint_burr(
         if let Ok(path) = builder.build() {
             window.paint_path(path, spine.color);
         }
-        // A small bead at the tip, the burr's hook.
+        // A small bead at the tip, the burr's hook
         let hook = (base_half * 0.75).clamp(0.9, 2.2);
         let mut bead = spine.color;
         bead.l = (bead.l + 0.08).min(0.95);
@@ -743,7 +743,7 @@ pub fn lerp_hsla(a: Hsla, b: Hsla, t: f32) -> Hsla {
     if t >= 1.0 {
         return b;
     }
-    // Take the short way around the hue wheel.
+    // Take the short way around the hue wheel
     let mut dh = b.h - a.h;
     if dh > 0.5 {
         dh -= 1.0;
@@ -795,7 +795,7 @@ mod tests {
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(400.), px(400.)));
         let geometry = Geometry::new(bounds, RINGS);
         assert!(matches!(hit_test(&segments, &geometry, point(px(200.), px(200.))), Some(Hit::Center)));
-        // Just right of 12 o'clock on the first ring is the largest child.
+        // Just right of 12 o'clock on the first ring is the largest child
         let y = 200.0 - geometry.inner - geometry.ring / 2.0;
         match hit_test(&segments, &geometry, point(px(205.), px(y))) {
             Some(Hit::Segment(ix)) => assert_eq!(segments[ix].target, ring0[0].target),
@@ -817,7 +817,7 @@ mod tests {
         let tree = scan::scan(&dir, "t", &Progress::default()).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
 
-        // By size the movie leads; by file count the folder of twenty files does.
+        // By size the movie leads; by file count the folder of twenty files does
         let by_size = layout(&tree, Tree::ROOT, Measure::Size);
         let by_count = layout(&tree, Tree::ROOT, Measure::Count);
         let first = |segs: &[Segment]| match segs.iter().find(|s| s.depth == 0).unwrap().target {
@@ -833,10 +833,10 @@ mod tests {
         let ring0: Vec<_> = types.iter().filter(|s| s.depth == 0).collect();
         assert!(matches!(ring0[0].target, Target::Group(g) if breakdown.group(g).category == Category::Video));
         assert!((ring0.last().unwrap().end - 1.0).abs() < 1e-3);
-        // The outer ring holds the real files, so they can be collected.
+        // The outer ring holds the real files, so they can be collected
         assert!(types.iter().any(|s| s.depth == 2 && matches!(s.target, Target::Node(_))));
 
-        // Opening the video type puts its extension on the first ring and the movie just outside.
+        // Opening the video type puts its extension on the first ring and the movie just outside
         let video = breakdown.find(Category::Video, None).unwrap();
         let opened = layout_types(&tree, &breakdown, video);
         assert!(matches!(opened[0].target, Target::Group(g) if breakdown.group(g).name == ".mp4"));
@@ -844,7 +844,7 @@ mod tests {
     }
 
     /// At the end of a zoom, the descendant's subtree must land exactly where its own
-    /// layout puts it, so swapping to that layout doesn't jump.
+    /// layout puts it, so swapping to that layout doesn't jump
     #[test]
     fn zoom_lands_on_child_layout() {
         let dir = std::env::temp_dir().join(format!("burrdisk-zoom-{}", std::process::id()));
@@ -873,7 +873,7 @@ mod tests {
             assert!((start - seg.start).abs() < 1e-4 && (end - seg.end).abs() < 1e-4);
             assert!((found.alt.h - seg.color.h).abs() < 1e-3 && (found.alt.l - seg.color.l).abs() < 1e-3);
         }
-        // Zooming back out is the same move in reverse.
+        // Zooming back out is the same move in reverse
         assert!(Zoom::new(&tree, big, Tree::ROOT, Measure::Size).is_some());
     }
 }

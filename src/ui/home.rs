@@ -21,7 +21,7 @@ const IMAGES_TOGGLE: Duration = Duration::from_millis(380);
 const IMAGE_ROW: f32 = 40.0;
 const IMAGE_GAP: f32 = 4.0;
 
-/// Fades and lifts a section into place, `order` beats after the page appears.
+/// Fades and lifts a section into place, `order` beats after the page appears
 pub fn rise(el: impl IntoElement, id: impl Into<ElementId>, order: usize) -> AnyElement {
     let delay = order as f32 * 0.08;
     let total = delay + 0.5;
@@ -45,11 +45,11 @@ fn ago(at: Instant, took: Duration, admin: bool) -> String {
     format!("Scanned{who} {when} in {}", format::duration(took))
 }
 
-/// What the home screen knows about a disk beyond its volume figures.
+/// What the home screen knows about a disk beyond its volume figures
 #[derive(Clone)]
 struct Known {
     scanned: Option<Instant>,
-    /// How long the cached scan took.
+    /// How long the cached scan took
     took: Duration,
     admin: bool,
     lobes: Vec<Lobe>,
@@ -67,7 +67,7 @@ fn known(app: &Burrdisk, volume: &Volume) -> Known {
 
 /// The spines of a disk's burr. A scanned disk grows one cluster of spines per
 /// top-level folder, in its chart color, so the burr previews what's inside. An
-/// unscanned one shows how full it is: lit spines for used space, stubs for free.
+/// unscanned one shows how full it is: lit spines for used space, stubs for free
 fn spines(volume: &Volume, known: &Known, count: usize) -> Vec<Spine> {
     if !known.lobes.is_empty() {
         let widest = known.lobes.iter().map(|l| l.end - l.start).fold(0.0f32, f32::max).max(1e-3);
@@ -78,7 +78,7 @@ fn spines(volume: &Volume, known: &Known, count: usize) -> Vec<Spine> {
             let reach = 0.5 + 0.5 * (span / widest).sqrt();
             for j in 0..n {
                 let u = (j as f32 + 0.5) / n as f32;
-                // Each folder bulges in its middle, so neighbors read as separate lobes.
+                // Each folder bulges in its middle, so neighbors read as separate lobes
                 let profile = 0.72 + 0.28 * (u * std::f32::consts::PI).sin();
                 out.push(Spine { at: lobe.start + span * u, len: reach * profile, color: lobe.color });
             }
@@ -100,7 +100,7 @@ fn spines(volume: &Volume, known: &Known, count: usize) -> Vec<Spine> {
         .collect()
 }
 
-/// A disk's burr as it looks before a scan: lit spines for the space in use.
+/// A disk's burr as it looks before a scan: lit spines for the space in use
 pub fn fill_burr(id: impl Into<ElementId>, volume: &Volume, size: f32, count: usize, grow: f32) -> impl IntoElement {
     let known = Known { scanned: None, took: Duration::ZERO, admin: false, lobes: Vec::new() };
     let spines = spines(volume, &known, count);
@@ -141,7 +141,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
     if grow < 1.0 {
         window.request_animation_frame();
     }
-    // Display type follows the window a little, so the lead disk neither crowds nor floats.
+    // Display type follows the window a little, so the lead disk neither crowds nor floats
     let scale = (f32::from(window.viewport_size().width) / (1180.0 * crate::ui::UI_SCALE)).clamp(0.82, 1.12);
 
     let startup = app.volumes.iter().find(|v| v.kind == VolumeKind::Startup).cloned();
@@ -219,7 +219,7 @@ fn heading(text: &'static str, count: Option<usize>) -> impl IntoElement {
 }
 
 fn titlebar(grow: f32, update: Option<AnyElement>, window: &Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
-    // The wordmark's own little burr, all brand orange.
+    // The wordmark's own little burr, all brand orange
     let mark: Vec<Spine> = (0..14)
         .map(|i| Spine { at: i as f32 / 14.0, len: 0.95, color: theme::accent().into() })
         .collect();
@@ -233,7 +233,7 @@ fn titlebar(grow: f32, update: Option<AnyElement>, window: &Window, cx: &mut Con
         .pr(px(if cfg!(windows) { platform::TITLEBAR_END } else { 20. }))
         .window_control_area(WindowControlArea::Drag)
         // Keeps the root's focus-on-click from claiming presses here, which would stop
-        // Windows from moving (or, on double-click, maximizing) the window.
+        // Windows from moving (or, on double-click, maximizing) the window
         .occlude()
         .child(
             div()
@@ -280,7 +280,7 @@ fn titlebar(grow: f32, update: Option<AnyElement>, window: &Window, cx: &mut Con
         )
 }
 
-/// The disk actions menu, shared by every disk's chevron.
+/// The disk actions menu, shared by every disk's chevron
 fn disk_menu(app: &Burrdisk, volume: &Volume, known: &Known, window: &Window, cx: &mut Context<Burrdisk>) -> Option<AnyElement> {
     if app.menu.as_ref() != Some(&volume.mount) {
         return None;
@@ -296,7 +296,7 @@ fn disk_menu(app: &Burrdisk, volume: &Volume, known: &Known, window: &Window, cx
     };
     let mount = volume.mount.clone();
     let info = volume.mount.clone();
-    // A disk that hasn't been scanned yet gets scanned, not rescanned.
+    // A disk that hasn't been scanned yet gets scanned, not rescanned
     let verb = if known.scanned.is_some() { "Rescan" } else { "Scan" };
     let items = vec![
         MenuItem::new(verb, act(|this, v, cx| {
@@ -324,7 +324,7 @@ fn disk_menu(app: &Burrdisk, volume: &Volume, known: &Known, window: &Window, cx
     ))
 }
 
-/// Scan or Open, with the chevron for the rest of the disk's actions.
+/// Scan or Open, with the chevron for the rest of the disk's actions
 fn scan_button(
     app: &Burrdisk,
     volume: &Volume,
@@ -357,7 +357,7 @@ fn scan_button(
         .children(disk_menu(app, volume, known, window, cx))
 }
 
-/// The startup disk: a big burr beside its name, capacity and scan button.
+/// The startup disk: a big burr beside its name, capacity and scan button
 fn lead(
     app: &Burrdisk,
     volume: Volume,
@@ -460,7 +460,7 @@ fn lead(
         )
 }
 
-/// One line under the startup disk while macOS keeps protected folders from the scan.
+/// One line under the startup disk while macOS keeps protected folders from the scan
 fn access_notice() -> impl IntoElement {
     let t = fx::hover("access-link");
     div()
@@ -560,13 +560,13 @@ fn drive(
         .into_any_element()
 }
 
-/// Disk images: the first few always, the rest sliding open below them.
+/// Disk images: the first few always, the rest sliding open below them
 fn image_section(app: &Burrdisk, images: Vec<Volume>, window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let total = images.len();
     let collapsible = total > COLLAPSED_IMAGES + 1;
     let expanded = app.show_all_images || !collapsible;
 
-    // 0 = collapsed, 1 = fully open, eased between while toggling.
+    // 0 = collapsed, 1 = fully open, eased between while toggling
     let progress = match app.images_toggled {
         Some(at) if at.elapsed() < IMAGES_TOGGLE => {
             window.request_animation_frame();
@@ -595,7 +595,7 @@ fn image_section(app: &Burrdisk, images: Vec<Volume>, window: &mut Window, cx: &
         .into_iter()
         .enumerate()
         .map(|(n, (ix, v))| {
-            // Rows further down arrive a little later, like a drawer unrolling.
+            // Rows further down arrive a little later, like a drawer unrolling
             let local = ((progress * (1.0 + rest_count as f32 * 0.03)) - n as f32 * 0.03).clamp(0.0, 1.0);
             let known = known(app, &v);
             div()
@@ -641,7 +641,7 @@ fn image_section(app: &Burrdisk, images: Vec<Volume>, window: &mut Window, cx: &
                             }))
                             .child(label)
                             .child(
-                                // The chevron turns from pointing right to pointing down.
+                                // The chevron turns from pointing right to pointing down
                                 div().size(px(12.)).child(icon(
                                     if progress > 0.5 { Icon::ChevronDown } else { Icon::ChevronRight },
                                     12.0,
@@ -669,7 +669,7 @@ fn image_section(app: &Burrdisk, images: Vec<Volume>, window: &mut Window, cx: &
 }
 
 /// Each disk image keeps a hue of its own. Hovering only raises its lightness and
-/// chroma, so the icon never sweeps through other hues on the way.
+/// chroma, so the icon never sweeps through other hues on the way
 fn image_color(ix: usize, t: f32) -> Hsla {
     let hue = (52.0 + ix as f32 * 137.5).rem_euclid(360.0);
     sunburst::oklch(0.58 + 0.16 * t, 0.035 + 0.11 * t, hue)

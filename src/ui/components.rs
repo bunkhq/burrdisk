@@ -116,7 +116,7 @@ pub fn shadow(color: Hsla, y: f32, blur: f32, spread: f32) -> BoxShadow {
     }
 }
 
-/// A soft colored halo under a raised element.
+/// A soft colored halo under a raised element
 pub fn glow(color: impl Into<Hsla>, strength: f32) -> Vec<BoxShadow> {
     let color = color.into();
     vec![
@@ -127,7 +127,7 @@ pub fn glow(color: impl Into<Hsla>, strength: f32) -> Vec<BoxShadow> {
 
 /// Filled buttons are lit from above: a vertical gradient and a halo in their own
 /// color that grows on hover. No button draws an outline; each one carries a soft
-/// light that follows the cursor across it instead.
+/// light that follows the cursor across it instead
 pub fn button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
@@ -153,7 +153,7 @@ fn styled_button(
         ButtonStyle::Ghost => fx::mix(theme::text_muted(), theme::text(), t),
     };
     // The light shows most on the dark stone and ghost fills; orange and red are
-    // already bright, so it only warms them.
+    // already bright, so it only warms them
     let light = match style {
         ButtonStyle::Primary => 0.20,
         ButtonStyle::Danger => 0.18,
@@ -217,7 +217,7 @@ fn filled(base: Stateful<Div>, hi: Rgba, lo: Rgba, fg: Hsla, tone: Rgba, t: f32)
     })
 }
 
-/// A button with a leading icon.
+/// A button with a leading icon
 pub fn icon_label_button(
     id: impl Into<ElementId>,
     glyph: Icon,
@@ -262,7 +262,7 @@ pub fn icon_button(
 /// Minimize, maximize and close, drawn at the right end of a title bar on Windows,
 /// where Burrdisk draws its own title bar. The system handles the clicks (and shows
 /// Snap Layouts over maximize); these only paint. Empty on macOS, which keeps its
-/// traffic lights.
+/// traffic lights
 pub fn window_controls(window: &Window) -> AnyElement {
     if !cfg!(windows) {
         return div().into_any_element();
@@ -305,11 +305,11 @@ pub fn window_controls(window: &Window) -> AnyElement {
 
 /// A number with a smaller unit after it ("38.0 GB"), sharing one baseline.
 /// Both boxes get a line height equal to their font size and are bottom-aligned;
-/// the unit is then lifted by the difference in descent below the baseline.
+/// the unit is then lifted by the difference in descent below the baseline
 pub fn amount(number: impl Into<SharedString>, unit: impl Into<SharedString>, size: f32, unit_size: f32) -> Div {
     const DESCENT: f32 = 0.145;
     let unit = unit.into();
-    // A percent sign sits snug against its number; words like "GB" need air.
+    // A percent sign sits snug against its number; words like "GB" need air
     let gap = if unit == "%" { size * 0.03 } else { size * 0.12 };
     div()
         .flex()
@@ -334,7 +334,7 @@ pub fn amount(number: impl Into<SharedString>, unit: impl Into<SharedString>, si
         )
 }
 
-/// A button with a chevron segment beside it that opens a menu of related actions.
+/// A button with a chevron segment beside it that opens a menu of related actions
 pub fn split_button(
     id: &str,
     glyph: Icon,
@@ -351,7 +351,7 @@ pub fn split_button(
         .gap_0()
         .rounded_l(px(0.))
         .child(icon(Icon::ChevronDown, 13.0, if style == ButtonStyle::Primary { rgb(0x1f0b00) } else { theme::text_muted() }));
-    // A hairline in the button's own ink separates the two halves.
+    // A hairline in the button's own ink separates the two halves
     let seam: Hsla = if style == ButtonStyle::Primary { rgba(0x1f0b0040).into() } else { rgba(0xffffff1f).into() };
     div()
         .flex()
@@ -363,7 +363,7 @@ pub fn split_button(
 
 pub struct MenuItem {
     pub label: SharedString,
-    /// Key hint shown at the right edge, like "Space" or "⌘⌫".
+    /// Key hint shown at the right edge, like "Space" or "⌘⌫"
     pub shortcut: Option<SharedString>,
     pub enabled: bool,
     pub action: Option<Box<dyn Fn(&mut Window, &mut App)>>,
@@ -390,7 +390,7 @@ impl MenuItem {
 }
 
 /// A native-feeling popup menu, positioned below the element it is placed in.
-/// `on_dismiss` runs for a click anywhere outside it.
+/// `on_dismiss` runs for a click anywhere outside it
 pub fn popup_menu(
     id: &str,
     items: Vec<MenuItem>,
@@ -400,7 +400,7 @@ pub fn popup_menu(
     menu(id, items, None, window, on_dismiss)
 }
 
-/// A right-click menu opening at `position`, in window coordinates.
+/// A right-click menu opening at `position`, in window coordinates
 pub fn context_menu(
     id: &str,
     items: Vec<MenuItem>,
@@ -470,7 +470,7 @@ fn menu(
         .when(position.is_none(), |s| s.absolute().top_full().right_0())
         .child(
             // A transparent backdrop catches the click that dismisses the menu, so it
-            // never also lands on whatever is underneath.
+            // never also lands on whatever is underneath
             gpui::deferred(
                 gpui::anchored().position(gpui::point(px(0.), px(0.))).child(
                     div()

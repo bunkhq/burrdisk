@@ -6,7 +6,7 @@
 ; Installs per user by default (no administrator prompt), with an option to
 ; install for all users. Burrdisk updates itself by downloading the next
 ; release's installer and running it silently over the same install, so the
-; installer's file name and AppId must stay as they are.
+; installer's file name and AppId must stay as they are
 
 #ifndef AppVersion
   #define AppVersion "0.0.0"
@@ -19,7 +19,7 @@
 #endif
 
 [Setup]
-; Never change AppId: Windows uses it to find an existing install to upgrade.
+; Never change AppId: Windows uses it to find an existing install to upgrade
 AppId={{902DCAC4-ABC7-4260-BE62-06348DD42161}
 AppName=Burrdisk
 AppVersion={#AppVersion}
@@ -63,7 +63,7 @@ Name: "{autodesktop}\Burrdisk"; Filename: "{app}\Burrdisk.exe"; Tasks: desktopic
 [Run]
 Filename: "{app}\Burrdisk.exe"; Description: "{cm:LaunchProgram,Burrdisk}"; Flags: nowait postinstall skipifsilent
 ; Burrdisk's own updater runs this installer silently with /relaunch=1 and quits;
-; this opens the updated app again.
+; this opens the updated app again
 Filename: "{app}\Burrdisk.exe"; Flags: nowait runasoriginaluser skipifnotsilent; Check: Relaunching
 
 [Code]

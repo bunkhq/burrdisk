@@ -9,7 +9,7 @@
 //!
 //! `BURRDISK_UPDATE_FEED` points the check at another release JSON (in the shape
 //! of GitHub's `releases/latest`), for testing the whole flow against a local
-//! server. It also turns updates on in builds that would otherwise skip them.
+//! server. It also turns updates on in builds that would otherwise skip them
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,16 +22,16 @@ use sha2::{Digest, Sha256};
 
 const FEED: &str = "https://api.github.com/repos/bunkhq/burrdisk/releases/latest";
 pub const RELEASES_PAGE: &str = "https://github.com/bunkhq/burrdisk/releases";
-/// How often a running Burrdisk looks for a new release.
+/// How often a running Burrdisk looks for a new release
 pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
-/// No release is anywhere near this; a bigger download is refused.
+/// No release is anywhere near this; a bigger download is refused
 const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Version(pub u64, pub u64, pub u64);
 
 impl Version {
-    /// Parses "1.2.3" or "v1.2.3"; anything after a `-` or `+` is ignored.
+    /// Parses "1.2.3" or "v1.2.3"; anything after a `-` or `+` is ignored
     pub fn parse(text: &str) -> Option<Self> {
         let core = text.trim().trim_start_matches('v').split(['-', '+']).next()?;
         let mut parts = core.split('.').map(|p| p.parse::<u64>().ok());
@@ -55,10 +55,10 @@ impl std::fmt::Display for Version {
 #[derive(Clone, Debug)]
 pub struct Release {
     pub version: Version,
-    /// The release notes' opening paragraph, as plain text.
+    /// The release notes' opening paragraph, as plain text
     pub summary: String,
     pub page: String,
-    /// The build for this platform, if the release has one.
+    /// The build for this platform, if the release has one
     pub asset: Option<Asset>,
 }
 
@@ -67,7 +67,7 @@ pub struct Asset {
     pub name: String,
     pub url: String,
     pub size: u64,
-    /// Lowercase hex SHA-256, from the digest GitHub computes on upload.
+    /// Lowercase hex SHA-256, from the digest GitHub computes on upload
     pub sha256: Option<String>,
 }
 
@@ -76,13 +76,13 @@ fn feed_override() -> Option<String> {
 }
 
 /// Whether this copy looks for updates at all: installed release builds do;
-/// `cargo run`, the dev app and debug builds don't.
+/// `cargo run`, the dev app and debug builds don't
 pub fn enabled() -> bool {
     feed_override().is_some() || (!cfg!(debug_assertions) && install_kind().is_some())
 }
 
 /// Why this copy can't replace itself, worded to follow "Burrdisk can't update
-/// itself here: ". `None` when it can.
+/// itself here: ". `None` when it can
 pub fn blocker() -> Option<String> {
     match install_kind() {
         None => Some("it isn\u{2019}t running as an installed app".into()),
@@ -103,12 +103,12 @@ pub fn blocker() -> Option<String> {
 }
 
 enum Install {
-    /// macOS: the running `Burrdisk.app`.
+    /// macOS: the running `Burrdisk.app`
     Bundle(PathBuf),
     /// Windows: installed by the installer, which can run again over it. Holds
-    /// whether it went in for all users (and so needs an administrator).
+    /// whether it went in for all users (and so needs an administrator)
     Installer(bool),
-    /// Windows: an exe run from anywhere else.
+    /// Windows: an exe run from anywhere else
     Portable,
 }
 
@@ -120,7 +120,7 @@ fn install_kind() -> Option<Install> {
         if app.extension()? != "app" {
             return None;
         }
-        // The dev app shares the bundle identifier; its name tells it apart.
+        // The dev app shares the bundle identifier; its name tells it apart
         let plist = std::fs::read_to_string(app.join("Contents/Info.plist")).ok()?;
         if !plist.contains("<key>CFBundleName</key><string>Burrdisk</string>") {
             return None;
@@ -155,7 +155,7 @@ fn writable(_: &Path) -> bool {
     true
 }
 
-/// The release asset built for this platform, as the release scripts name it.
+/// The release asset built for this platform, as the release scripts name it
 fn asset_suffix() -> String {
     if cfg!(target_os = "macos") {
         let arch = if cfg!(target_arch = "aarch64") { "arm64" } else { "x86_64" };
@@ -175,7 +175,7 @@ fn agent() -> ureq::Agent {
         .into()
 }
 
-/// The latest release, if it's newer than this copy. Blocks on the network.
+/// The latest release, if it's newer than this copy. Blocks on the network
 pub fn check() -> Result<Option<Release>> {
     let url = feed_override().unwrap_or_else(|| FEED.to_string());
     let body = agent()
@@ -217,7 +217,7 @@ fn parse_release(json: &serde_json::Value) -> Option<Release> {
     })
 }
 
-/// The first paragraph of Markdown release notes, with the markup taken out.
+/// The first paragraph of Markdown release notes, with the markup taken out
 fn summary(notes: &str) -> String {
     let paragraph = notes
         .split("\n\n")
@@ -226,7 +226,7 @@ fn summary(notes: &str) -> String {
         .unwrap_or_default();
     let mut text = String::new();
     let mut rest = paragraph;
-    // [label](url) keeps its label.
+    // [label](url) keeps its label
     while let Some(open) = rest.find('[') {
         text.push_str(&rest[..open]);
         let after = &rest[open + 1..];
@@ -251,7 +251,7 @@ fn summary(notes: &str) -> String {
     }
 }
 
-/// Progress of a download, shared with the UI.
+/// Progress of a download, shared with the UI
 #[derive(Default)]
 pub struct Progress {
     pub done: AtomicU64,
@@ -259,10 +259,10 @@ pub struct Progress {
     pub cancel: AtomicBool,
 }
 
-/// Where downloads and the unpacked app wait to be installed.
+/// Where downloads and the unpacked app wait to be installed
 fn staging() -> Result<PathBuf> {
     let dir = match install_kind() {
-        // Beside the app, so the swap is a rename on one volume.
+        // Beside the app, so the swap is a rename on one volume
         Some(Install::Bundle(app)) => app.parent().unwrap().join(".Burrdisk-update"),
         _ => std::env::temp_dir().join("Burrdisk-update"),
     };
@@ -271,7 +271,7 @@ fn staging() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Downloads the release's asset and checks its digest. Blocks on the network.
+/// Downloads the release's asset and checks its digest. Blocks on the network
 pub fn download(asset: &Asset, progress: Arc<Progress>) -> Result<PathBuf> {
     let dir = staging()?;
     let path = dir.join(&asset.name);
@@ -313,7 +313,7 @@ pub fn download(asset: &Asset, progress: Arc<Progress>) -> Result<PathBuf> {
             bail!("the download didn\u{2019}t match its checksum")
         }
         // Every asset uploaded to GitHub since mid-2025 has a digest. One without
-        // can't be checked, so it isn't installed.
+        // can't be checked, so it isn't installed
         None => {
             let _ = std::fs::remove_dir_all(&dir);
             bail!("the release has no checksum to check the download against")
@@ -322,7 +322,7 @@ pub fn download(asset: &Asset, progress: Arc<Progress>) -> Result<PathBuf> {
     }
 }
 
-/// What's left to do once Burrdisk has quit.
+/// What's left to do once Burrdisk has quit
 pub struct Relaunch(Box<dyn FnOnce() -> Result<()> + Send>);
 
 impl Relaunch {
@@ -332,7 +332,7 @@ impl Relaunch {
 }
 
 /// Installs a verified download as far as it can while Burrdisk runs. The
-/// returned step relaunches; run it, then quit.
+/// returned step relaunches; run it, then quit
 pub fn install(release: &Release, download: &Path) -> Result<Relaunch> {
     match install_kind() {
         Some(Install::Bundle(app)) => install_bundle(&app, release.version, download),
@@ -373,11 +373,11 @@ fn install_bundle(app: &Path, version: Version, zip: &Path) -> Result<Relaunch> 
         "verify the update\u{2019}s signature",
     )?;
     // Downloaded by Burrdisk itself, so there should be no quarantine flag; clear
-    // any, so the relaunch isn't stopped by Gatekeeper's first-open check.
+    // any, so the relaunch isn't stopped by Gatekeeper's first-open check
     let _ = Command::new("/usr/bin/xattr").args(["-dr", "com.apple.quarantine"]).arg(&new).output();
 
     // Swap: the running app moves aside (it keeps running from there) and the new
-    // one takes its place. Put the old one back if the second step fails.
+    // one takes its place. Put the old one back if the second step fails
     let old = stage.join("Burrdisk-old.app");
     std::fs::rename(app, &old).context("couldn\u{2019}t move the current app aside")?;
     if let Err(err) = std::fs::rename(&new, app) {
@@ -387,7 +387,7 @@ fn install_bundle(app: &Path, version: Version, zip: &Path) -> Result<Relaunch> 
 
     let app = app.to_path_buf();
     Ok(Relaunch(Box::new(move || {
-        // Waits for this process to exit, clears the staging folder, opens the new app.
+        // Waits for this process to exit, clears the staging folder, opens the new app
         Command::new("/bin/sh")
             .arg("-c")
             .arg(r#"while kill -0 "$1" 2>/dev/null; do sleep 0.1; done; rm -rf "$2"; open "$3""#)
@@ -407,12 +407,12 @@ fn run_installer(installer: PathBuf, all_users: bool) -> Relaunch {
 
 /// Inno Setup: a progress window only, into the existing install, then
 /// `/relaunch=1` starts Burrdisk again (see installer/burrdisk.iss). It waits
-/// for this process to close, and closes it if it hasn't.
+/// for this process to close, and closes it if it hasn't
 #[cfg(windows)]
 fn start_installer(installer: &Path, all_users: bool) -> Result<()> {
     let scope = if all_users { "/ALLUSERS" } else { "/CURRENTUSER" };
     let params = format!("/SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /relaunch=1 {scope}");
-    // Asks for the process handle only to learn that it started; Burrdisk quits next.
+    // Asks for the process handle only to learn that it started; Burrdisk quits next
     let started = crate::platform::shell_execute("open", installer, Some(std::ffi::OsStr::new(&params)), true);
     started.map(|_| ()).ok_or_else(|| anyhow!("couldn\u{2019}t start the installer"))
 }
@@ -422,7 +422,7 @@ fn start_installer(_: &Path, _: bool) -> Result<()> {
     bail!("the installer only runs on Windows")
 }
 
-/// Clears what an earlier update left behind (a failed or interrupted one).
+/// Clears what an earlier update left behind (a failed or interrupted one)
 pub fn clean_up() {
     if let Some(Install::Bundle(app)) = install_kind() {
         let _ = std::fs::remove_dir_all(app.parent().unwrap().join(".Burrdisk-update"));

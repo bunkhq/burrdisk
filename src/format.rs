@@ -1,4 +1,4 @@
-/// Formats a byte count the way Finder does (decimal units).
+/// Formats a byte count the way Finder does (decimal units)
 pub fn bytes(n: u64) -> String {
     const UNITS: [&str; 6] = ["bytes", "KB", "MB", "GB", "TB", "PB"];
     if n < 1000 {
@@ -13,7 +13,7 @@ pub fn bytes(n: u64) -> String {
     format!("{value:.1} {}", UNITS[unit])
 }
 
-/// Splits a formatted size into its number and unit, for typographic emphasis.
+/// Splits a formatted size into its number and unit, for typographic emphasis
 pub fn bytes_parts(n: u64) -> (String, String) {
     let s = bytes(n);
     match s.split_once(' ') {
@@ -34,7 +34,7 @@ pub fn count(n: u64) -> String {
     out
 }
 
-/// A span of time as people say it: "0.8 s", "42 s", "3 min 12 s", "1 h 4 min".
+/// A span of time as people say it: "0.8 s", "42 s", "3 min 12 s", "1 h 4 min"
 pub fn duration(d: std::time::Duration) -> String {
     let s = d.as_secs_f64();
     match d.as_secs() {
@@ -46,7 +46,7 @@ pub fn duration(d: std::time::Duration) -> String {
     }
 }
 
-/// A running clock for something still going: "0:07", "12:40", "1:02:05".
+/// A running clock for something still going: "0:07", "12:40", "1:02:05"
 pub fn clock(d: std::time::Duration) -> String {
     let n = d.as_secs();
     if n < 3600 { format!("{}:{:02}", n / 60, n % 60) } else { format!("{}:{:02}:{:02}", n / 3600, n % 3600 / 60, n % 60) }

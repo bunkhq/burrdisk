@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Newer Xcode ships the Metal compiler as a separate component.
+      # Newer Xcode ships the Metal compiler as a separate component
       - name: Metal toolchain
         run: xcodebuild -downloadComponent MetalToolchain || true
       - name: Build Burrdisk.app and disk image
@@ -33,7 +33,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macos
-          # The disk image is for people; the zip is what the updater installs.
+          # The disk image is for people; the zip is what the updater installs
           path: |
             dist/*.dmg
             dist/*.zip

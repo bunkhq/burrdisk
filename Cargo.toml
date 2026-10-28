@@ -40,7 +40,7 @@ embed-resource = "3"
 
 [features]
 default = []
-# Compile Metal shaders at runtime instead, for building without a full Xcode install.
+# Compile Metal shaders at runtime instead, for building without a full Xcode install
 runtime_shaders = ["gpui/runtime_shaders"]
 
 [profile.dev.package."*"]

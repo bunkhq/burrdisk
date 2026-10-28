@@ -7,7 +7,7 @@ use crate::ui::home::{fill_burr, rise};
 use crate::volumes;
 
 /// The step before scanning a disk macOS partly hides: why Full Disk Access
-/// matters, how to turn it on, and a way to scan regardless.
+/// matters, how to turn it on, and a way to scan regardless
 pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let Screen::Access(target) = &app.screen else {
         return div().into_any_element();

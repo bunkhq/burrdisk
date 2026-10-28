@@ -17,7 +17,7 @@ use crate::update;
 const CARD_WIDTH: f32 = 328.;
 
 /// The titlebar's update button, with its card below it when open. `None` while
-/// there's nothing to say.
+/// there's nothing to say
 pub fn button_and_card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdisk>) -> Option<AnyElement> {
     let updater = &app.updater;
     let release = updater.release.as_ref();
@@ -67,7 +67,7 @@ pub fn button_and_card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdis
                 .on_mouse_move(fx::on_move)
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_update_card(cx)))
         })
-        // Fades in where it appears, so a new release arrives without a jolt.
+        // Fades in where it appears, so a new release arrives without a jolt
         .with_animation(
             SharedString::from(format!("update-button-in-{:?}", updater.since)),
             Animation::new(Duration::from_millis(420)).with_easing(ease_out_quint()),
@@ -90,7 +90,7 @@ fn percent(progress: &update::Progress) -> u64 {
     (progress.done.load(Ordering::Relaxed) * 100 / total).min(100)
 }
 
-/// The card: what's new, what restarting means, and the one action.
+/// The card: what's new, what restarting means, and the one action
 fn card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdisk>) -> AnyElement {
     let updater = &app.updater;
     let release = updater.release.as_ref();
@@ -147,7 +147,7 @@ fn card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdisk>) -> AnyEleme
             .child(link("update-notes", "What\u{2019}s New", move |_, _, cx| cx.open_url(&page)))
     });
 
-    // What restarting costs, said before the button rather than discovered after.
+    // What restarting costs, said before the button rather than discovered after
     let mut cautions: Vec<(Icon, String)> = Vec::new();
     if let Some(why) = &blocker {
         cautions.push((Icon::ShieldAlert, format!("Burrdisk can\u{2019}t update itself here: {why}.")));
@@ -192,7 +192,7 @@ fn card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdisk>) -> AnyEleme
         _ if can_install => actions(
             button("update-later", "Later", ButtonStyle::Ghost, cx.listener(|this, _, _, cx| this.close_update_card(cx))),
             if trash_busy {
-                // A Trash move can't be cut short by a restart.
+                // A Trash move can't be cut short by a restart
                 button("update-go", format!("Waiting for {}\u{2026}", platform::TRASH), ButtonStyle::Secondary, |_, _, _| {})
                     .opacity(0.6)
                     .cursor_default()
@@ -249,7 +249,7 @@ fn card(app: &Burrdisk, window: &Window, cx: &mut Context<Burrdisk>) -> AnyEleme
         .top_full()
         .right_0()
         .child(
-            // Clicking anywhere else puts the card away, as "Later" does.
+            // Clicking anywhere else puts the card away, as "Later" does
             gpui::deferred(
                 gpui::anchored().position(gpui::point(px(0.), px(0.))).child(
                     div()
@@ -332,7 +332,7 @@ fn installing_foot() -> AnyElement {
         .into_any_element()
 }
 
-/// A 6px bar in Ember over the track, lit like the filled buttons.
+/// A 6px bar in Ember over the track, lit like the filled buttons
 fn bar(fraction: f32) -> impl IntoElement {
     div().h(px(6.)).w_full().rounded_full().bg(theme::track()).child(
         div()
@@ -344,7 +344,7 @@ fn bar(fraction: f32) -> impl IntoElement {
     )
 }
 
-/// An Ember Hi text link that leaves the app, styled like home's "Turn On…".
+/// An Ember Hi text link that leaves the app, styled like home's "Turn On…"
 fn link(
     id: &'static str,
     label: &'static str,

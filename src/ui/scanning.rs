@@ -21,11 +21,11 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
     let name = scanning.target.name.clone();
     window.request_animation_frame();
 
-    // Known volume size gives a real progress ring; folders get a gentle spinner.
+    // Known volume size gives a real progress ring; folders get a gentle spinner
     let (start, end, tail) = match expected {
         Some(total) => (0.0, (bytes as f32 / total as f32).clamp(0.02, 0.98), false),
         None => {
-            // A comet whose tail stretches and shrinks as it circles.
+            // A comet whose tail stretches and shrinks as it circles
             let head = elapsed * 0.85;
             let length = 0.28 + 0.14 * (elapsed * 2.2).sin();
             (head - length, head, true)
