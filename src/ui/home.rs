@@ -164,7 +164,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         let known = known(app, &volume);
         body = body.child(rise(lead(app, volume, known, grow, scale, window, cx), "rise-lead", 0));
     } else if app.volumes_loaded {
-        body = body.child(div().text_color(theme::text_muted()).child("No startup disk found."));
+        body = body.child(div().text_color(theme::text_muted()).child("No startup disk found"));
     }
 
     if !drives.is_empty() {
@@ -476,7 +476,7 @@ fn access_notice() -> impl IntoElement {
                 .whitespace_nowrap()
                 .truncate()
                 .min_w_0()
-                .child("Full Disk Access is off, so part of this disk will be hidden."),
+                .child("Full Disk Access is off, so part of this disk will be hidden"),
         )
         .child(
             div()
