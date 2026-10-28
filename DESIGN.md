@@ -143,12 +143,11 @@ components:
     textColor: "{colors.ember-hi}"
     rounded: "7px"
     height: "24px"
-  tray-chip:
+  shelf-tile:
     backgroundColor: "{colors.graphite-raised}"
     textColor: "{colors.text}"
-    typography: "{typography.label}"
-    rounded: "{rounded.md}"
-    height: "30px"
+    rounded: "10px"
+    height: "58px"
   image-row-hover:
     backgroundColor: "{colors.graphite-surface}"
     rounded: "{rounded.lg}"
@@ -163,7 +162,7 @@ components:
 
 Burrdisk is a dark, near-monochrome Mac app in which the only real color comes from what is on the disk. The chrome is graphite: a near-black ground, two slightly lighter surfaces, hairline borders of white at low alpha, and three text greys. Against it, the data glows. Disks are drawn as burrs (a seed core with tapered spines). Folders are rings of the sunburst, colored in an OKLCH wheel that keeps every hue at equal brightness. Brand orange marks the primary action and the "this disk has a cached scan" state. Red is reserved for moving things to the Trash.
 
-Density is that of a desktop utility: a 32px control height, 14px body text, compact 12px labels. The UI has no web-style hero sections and no card grids. Home lays the disks on the bare ground with no containers. The explorer is a full-bleed chart with a 360px sidebar and an 80px collection tray. Every surface moves. Sections rise in, staggered. Spines grow out clockwise. Hovers ease in and out instead of snapping.
+Density is that of a desktop utility: a 32px control height, 14px body text, compact 12px labels. The UI has no web-style hero sections and no card grids. Home lays the disks on the bare ground with no containers. The explorer is a full-bleed chart with a resizable sidebar (360px to start) and an 80px collection tray. Every surface moves. Sections rise in, staggered. Spines grow out clockwise. Hovers ease in and out instead of snapping.
 
 The direction contract asked for a warm "loam" ground. The shipped ground is a cool graphite (`graphite-ground`), and only some pieces run warm: the seed core, the stone secondary button, and the menu ground. This file records the shipped values.
 
@@ -180,7 +179,7 @@ A graphite ground with one warm brand voice (orange), one alarm voice (red), and
 
 ### Primary
 - **Ember** (`ember`): the brand accent. Used for the primary button's tone, the hover fill of popup-menu items, the Collector's count badge, the drag-over outline, the 1.5px rim around a burr core whose disk has a cached scan, the scanned-dot on disk-image rows, and the all-orange wordmark burr.
-- **Ember Hi / Ember Lo** (`ember-hi`, `ember-lo`): the top and bottom of every orange gradient. Ember Hi also colors small state text on the dark ground ("Scanned 3 min ago", the go-up label in the chart center, the previewing folder icon).
+- **Ember Hi / Ember Lo** (`ember-hi`, `ember-lo`): the top and bottom of every orange gradient. Ember Hi also colors small state text on the dark ground ("Scanned 3 min ago in 8.5 s", the go-up label in the chart center, the previewing folder icon).
 - **Ember Soft** (`ember-soft`): a 14% orange wash used for drop targets, the pressed icon button, and the Full Disk Access hint panel.
 - **Ember Ink** (`ember-ink`): a near-black brown used for text and icons that sit on orange. It is never plain black.
 
@@ -221,7 +220,7 @@ A graphite ground with one warm brand voice (orange), one alarm voice (red), and
 
 ### Hierarchy
 - **Display** (700, 34px / 40px, scaled ×0.82–1.12 with window width around 1180px): the startup disk's name on home. Only one appears per screen.
-- **Figure** (700, 22–30px, line height equal to size): amounts. Examples are the sidebar's focused size (24px), the tray total (22px), the live scanning total (30px), the burr-center percent (26px × scale),. An amount pairs its bold number with a smaller medium-weight muted unit (14px or 13px). The unit sits on the number's baseline, lifted by 0.145 × the size difference.
+- **Figure** (700, 22–30px, line height equal to size): amounts. Examples are the sidebar's focused size (24px), the tray total (22px), the live scanning total (30px), the burr-center percent (26px × scale). An amount pairs its bold number with a smaller medium-weight muted unit (14px or 13px). The unit sits on the number's baseline, lifted by 0.145 × the size difference.
 - **Headline** (600, 18px): the "Scanning <name>" title.
 - **Title** (600, 16px): section headings on home ("Other drives", "Disk images" followed by a faint count) and the sidebar's focused folder name.
 - **Body Lead** (17px × scale): the capacity sentence under the startup disk's name, "<used> used of <total>". The used figure is semibold and the rest is muted.
@@ -240,7 +239,7 @@ The app is one window with a drawn titlebar row (56px tall) and screen-specific 
 **Windows scale.** Every design size on Windows is drawn 1.2× (`ui::UI_SCALE`, applied by `ui::px` and the rem size; 1px hairlines stay 1px), because a Windows pixel at 100% scaling is far smaller than a macOS point. The numbers in this file are design units before that scale.
 
 - **Home:** a single scrolling column, max 960px wide and centered, with 44px side padding and 56px bottom padding. Sections are 52px apart. The startup disk is a two-column lead: a 300px burr (× scale) on the left, a 44px gap, then name, capacity, details, and the split button on the right. Other drives wrap as 296px-wide items (a 104px burr plus text) with a 28px column gap. Disk images form a two-column grid of 40px rows with a 24px column gap and a 4px row gap. Lists longer than 7 collapse to 6, and the rest slide open like a drawer.
-- **Explorer:** a full-bleed sunburst, a 360px sidebar on the right with a left hairline, and an 80px tray across the bottom that has a top hairline and a surface-to-ground gradient. Toasts float 96px above the bottom edge, centered, max 640px wide.
+- **Explorer:** a full-bleed sunburst, a sidebar on the right with a left hairline (360px to start; drag its left edge to resize, from 280px up to leaving the chart 360px, where a 2px Ember line fades in on hover), and an 80px tray across the bottom that has a top hairline and a surface-to-ground gradient. Toasts float 96px above the bottom edge, centered, max 640px wide.
 - **Rhythm:** spacing follows a 4px grid. Steps of 6, 8, 12, 16, and 20px handle most inner gaps and padding.
 
 ## Elevation & Depth
@@ -283,6 +282,7 @@ Tactile and lit, like small backlit keys.
 ### Sidebar Rows
 - 50px tall with 11px corners. An 18px icon with no tile, in the row's chart color lightened +0.10 L (+0.08 more on hover), sits beside the name (14px medium) and a 3px share bar in the data color over `track`.
 - The icon's shape says what the item is: folder, archive, video, program (apps and other packages), audio, image, document, or plain file; Hidden space gets the disc. The color always matches the item's slice in the chart.
+- **App icons:** a file whose extension has a default app shows that app's icon instead, in full color and 2px larger than the glyph (app icons carry their own margin). Extension rows in File Types do the same. Folders, programs and Hidden space keep their glyph, as does any extension no app claims or whose icon hasn't loaded yet. Each extension is looked up once, off the UI thread (Windows: the associated program's icon, or a Store app's logo; macOS: the app `NSWorkspace` names for the type). This is the one place color doesn't come from the data wheel: the app's icon is how people recognize the kind of file. Collected items' app icons go grayscale.
 - **Compact rows:** items under 0.1% of the list collapse to 26px lines with 8px corners: a 13px icon, a 13px regular muted name, the figure in 12px faint, no bar or percent.
 - Hover tints the whole row with a horizontal gradient of its data color (16%→3%), with no border. Collected rows dim to 40%.
 
@@ -301,14 +301,22 @@ Tactile and lit, like small backlit keys.
 - **Errors** are neutral, never Trash Red: the reason as a muted sentence beside a faint X, with Try Again (primary) and Download Manually (ghost). A copy that can't replace itself (macOS App Translocation, a folder it can't write to, a Windows copy not installed by the installer) says why and offers Download, which opens the release page.
 
 ### Collection Tray
-- An 80px bar. When empty, it shows a 48px dashed badge with the inbox icon and two lines of muted and faint guidance. Once items are collected, it shows an orange count badge with a glow that flares when the count changes, the total as an amount, a horizontally scrolling row of chips, and Move to Trash.
-- **Chips:** 30px tall with 9px corners, a Raised→Surface gradient, a border in the item's data color at 35%, a 20px tinted icon tile, a 12px name (max 160px) and size, and a 22px X icon button. They enter with a 280ms fade and an 8px rise.
+- An 80px bar. When empty, it shows a 48px dashed badge with the inbox icon and two lines of muted and faint guidance. Once items are collected, it shows an orange count badge with a glow that flares when the count changes, the total as an amount, the shelf of tiles, and Move to Trash.
+- **Shelf:** collected items sit as 58px tall tiles with 10px corners and a Raised→Surface gradient with no border; on hover the gradient lifts brighter. A tile is as wide as its content, at least 76px, and names truncate only past 168px. Each tile has its icon and size in 11px semibold muted text, with the name in 11.5px below. App icons keep their own colors, and the fallback glyph takes the item's chart color, which is the only place the shelf shows data color. An 18px X fades in at the top right on hover. Tiles enter with a 280ms fade and an 8px rise.
+- **Shelf scrolling:** the wheel or trackpad scrolls the shelf sideways, easing toward the target (an 80ms exponential settle). Each edge fades over 36px wherever more tiles lie beyond it, drawn to match the tray's vertical gradient. A newly collected tile scrolls the shelf to its end.
+- **Dragging tiles:** a tile can be picked up. Its spot becomes an empty Track-filled well, and the tile follows the pointer with a deep shadow. Off the tray, a "Drop to put back" pill rides beside it, and letting go anywhere off the tray uncollects it. Dropped on another tile (which takes an Ember-tinted fill while hovered), it moves to that spot. Dropped on the tray's empty space, it moves to the end.
 - **Countdown:** 5 seconds. The count badge turns Trash Red and shows the seconds left inside a white ring that drains clockwise. Each new number drops into place and the badge's halo flares. Stop replaces the action; Esc also stops it.
-- **Collected items** drain to near-gray (saturation × 0.12) in the chart, the sidebar and the Collector chips.
+- **Manifest:** once Move to Trash is pressed, a 560px Menu Ground panel (14px corners, the deeper Float shadow, no border) rises above the tray's left side over 240ms. It names every item going: icon, name (13px), its folder's full path in faint 11.5px, and size. Its header holds the title, a 6px bar and a figure. During the countdown the bar is red and drains, with the figure "in 3 s". Once the move starts, the bar fills orange by bytes dealt with (eased), with the figure "94.1 MB of 162.6 MB". Each row shows its state: faint Waiting; Moving with a spinning loader in Ember Hi, a highlighted row and a sweeping 96px bar (one item can't report its own progress, so the sweep only says it's busy); Moved with a green check; or Couldn't move in Trash Red. Settled rows dim to 55%, and the list scrolls to keep the moving item in view, up to 240px tall. When everything is done, the list lingers 0.9s, fades, and then the result toast shows.
+- **Moving tray:** while moving, the badge shows the percent done on the orange gradient. Beside it are "Moving <item>" and a faint "2 of 8 · 53.0 MB". The shelf and buttons step aside.
+- **Collected items** drain to near-gray (saturation × 0.12) in the chart and the sidebar.
 - **Item menu:** right-click a row or chart slice for Expand (or Open), Preview (Space, macOS only), Show in Finder (File Explorer on Windows), Open in Terminal and Move to Collector (⌘⌫ / Ctrl+Backspace). Rows carry no hover buttons.
 
+### Scan Time
+- **While scanning:** a running clock ("0:07", "1:02:05") in 12px faint text under the file count, inside the progress ring.
+- **After:** the explorer's footer at the scan's top folder adds a "Scan time" row ("8.5 s", "42 s", "3 min 12 s") under Available, Purgeable and Capacity; folder scans, which have no volume figures, show the footer with this row alone. On home, the cached-scan line says how long it took: "Scanned 3 min ago in 8.5 s". The time is the walk itself, measured inside the scan, so an admin scan's password prompt doesn't count.
+
 ### Toast
-- A Raised pill with 14px corners and a border in its tone at 45%. It has a glow and a 26px round icon well that holds the tone at 20%. It enters over 320ms rising 12px, and fades out over its last 0.5s (shown for 6s).
+- A Raised pill with 14px corners and no border; its glow carries the tone. It has and a 26px round icon well that holds the tone at 20%. It enters over 320ms rising 12px, and fades out over its last 0.5s (shown for 6s).
 
 ### Burr (signature)
 - A data drawing, not decoration. The core is a filled Seed Core disc at 34% of the radius. When the disk has a cached scan, the core gets a 1.5px Ember rim.

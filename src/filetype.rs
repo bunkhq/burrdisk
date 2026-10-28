@@ -148,13 +148,13 @@ impl Breakdown {
                         continue;
                     }
                     // Apps and other packages count as one item, not their insides.
-                    NodeKind::Dir => category(&node.name, node.kind) != Category::Folder,
+                    NodeKind::Dir => category(node.name, node.kind) != Category::Folder,
                 };
             if !item {
                 stack.extend(node.children.iter().copied());
                 continue;
             }
-            let ext = extension(&node.name).unwrap_or_default();
+            let ext = extension(node.name).unwrap_or_default();
             let acc = by_ext.entry(ext).or_insert_with_key(|ext| Acc {
                 category: if ext.is_empty() { Category::Other } else { category_of_ext(ext) },
                 size: 0,
