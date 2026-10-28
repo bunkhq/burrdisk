@@ -1,0 +1,33 @@
+# Fails when a commit or PR carries AI or agent attribution, see AGENTS.md
+name: Attribution
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commits and PR text
+        env:
+          PR_TEXT: ${{ github.event.pull_request.title }} ${{ github.event.pull_request.body }}
+        run: |
+          pattern='co-authored-by:.*(claude|anthropic|openai|codex|copilot|cursor|devin|t3 ?code)|generated (with|by) \[?(claude|codex|copilot|cursor|devin|an? (ai|agent))'
+          if git log --format='%h %B' HEAD | grep -Eiq "$pattern"; then
+            git log --format='%h %B' HEAD | grep -Ei "$pattern"
+            echo "::error::A commit carries agent attribution"
+            exit 1
+          fi
+          if printf '%s' "$PR_TEXT" | grep -Eiq "$pattern"; then
+            echo "::error::The PR title or description carries agent attribution"
+            exit 1
+          fi
