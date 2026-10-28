@@ -34,6 +34,24 @@ pub fn count(n: u64) -> String {
     out
 }
 
+/// A span of time as people say it: "0.8 s", "42 s", "3 min 12 s", "1 h 4 min".
+pub fn duration(d: std::time::Duration) -> String {
+    let s = d.as_secs_f64();
+    match d.as_secs() {
+        _ if s < 0.05 => "< 0.1 s".to_string(),
+        _ if s < 9.95 => format!("{s:.1} s"),
+        n if n < 60 => format!("{} s", s.round() as u64),
+        n if n < 3600 => format!("{} min {} s", n / 60, n % 60),
+        n => format!("{} h {} min", n / 3600, n % 3600 / 60),
+    }
+}
+
+/// A running clock for something still going: "0:07", "12:40", "1:02:05".
+pub fn clock(d: std::time::Duration) -> String {
+    let n = d.as_secs();
+    if n < 3600 { format!("{}:{:02}", n / 60, n % 60) } else { format!("{}:{:02}:{:02}", n / 3600, n % 3600 / 60, n % 60) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +69,17 @@ mod tests {
     fn formats_counts() {
         assert_eq!(count(7), "7");
         assert_eq!(count(1234567), "1,234,567");
+    }
+
+    #[test]
+    fn formats_durations() {
+        use std::time::Duration;
+        assert_eq!(duration(Duration::from_millis(840)), "0.8 s");
+        assert_eq!(duration(Duration::from_millis(9_940)), "9.9 s");
+        assert_eq!(duration(Duration::from_millis(9_960)), "10 s");
+        assert_eq!(duration(Duration::from_secs(192)), "3 min 12 s");
+        assert_eq!(duration(Duration::from_secs(3_840)), "1 h 4 min");
+        assert_eq!(clock(Duration::from_secs(7)), "0:07");
+        assert_eq!(clock(Duration::from_secs(3_725)), "1:02:05");
     }
 }
