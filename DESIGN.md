@@ -351,3 +351,14 @@ Tactile and lit, like small backlit keys.
 - **Don't** outline buttons. A hairline around a control is the generic look Burrdisk avoids; separate with fill and light.
 - **Don't** add a second typeface. Hierarchy comes from Mona Sans' weight and size.
 - **Don't** add spines, rings, or colors that do not map to bytes on disk. The wordmark burr is the only ornamental burr.
+
+## Website Surface
+
+The marketing site (`site/`) is built inside this system: the same graphite ground, Ember lit keys, Fullness spines, data wheel and Mona Sans, with the app's color values copied unchanged. This section records only what the web adds at a larger scale. The app tokens above are untouched and still govern the app.
+
+- **Display type:** page headings (h1 and h2) are set in Mona Sans at 800 weight and 88% width, -0.015em tracking, line height 1, balanced. The h1 runs 44–88px (`clamp(44px, 6.2vw, 88px)`, max 13ch) and h2 runs 38–72px (`clamp(38px, 5vw, 72px)`). The app's 700-weight, 34px Display stays the app's ceiling; only the web uses the heavier, narrower cut.
+- **Web radii:** full-size web buttons (52px tall) take 12px corners, and the small nav buttons keep the app's 9px. The alert panel takes 18px. Everything else reuses the app's 8–14px steps.
+- **Faint Text (`#8b8b93`):** a lifted Faint for copy a visitor has to read (fine print, footnotes, captions, the tray's second line). It reaches 5.4:1 on Graphite Ground and 4.7:1 on Menu Ground, where Faint (`text-faint`) reaches 3.5:1 and 3.0:1. Faint itself stays for icons, separators, underlines and the empty badge.
+- **Alert:** a Menu Ground panel at most 460px wide, with 18px corners, 24px / 28px padding, no border, a top inner highlight (white 6%) and a deep, soft neutral shadow (`0 30px 70px -16px` black at 75%, plus a 1px / 3px contact). It holds a 13px muted disk name, a 28px bold title, a 17px capacity sentence in the app's sentence form, and an 8px Fullness bar on `track` that glows in its end tone. It stands in for the OS storage warning, and the same component returns after the cleanup.
+
+**The Only The Stage In View Glows Rule.** Data drawings on the page (the hero burr, the sunburst, the app screenshots) desaturate to graphite (`saturate(0.15) brightness(0.8)`) while their section is out of view, and regain full data color over 900ms once at least 18% of the section is on screen. Two neighboring sections can be lit at the same moment while both cross that threshold. Chrome and Ember never dim.
