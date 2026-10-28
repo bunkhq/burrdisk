@@ -24,54 +24,54 @@ actions!(burrdisk, [GoUp, GoBack, GoForward, Preview, Collect, Quit, CheckForUpd
 pub struct ScanTarget {
     pub path: PathBuf,
     pub name: String,
-    /// Set when scanning a whole volume; enables free/hidden space accounting.
+    /// Set when scanning a whole volume; enables free/hidden space accounting
     pub volume: Option<Volume>,
-    /// Scan as root through an authorized helper process, to see folders the user can't.
+    /// Scan as root through an authorized helper process, to see folders the user can't
     pub admin: bool,
 }
 
 pub enum Screen {
     Home,
-    /// Asks for Full Disk Access before a scan that would otherwise miss protected folders.
+    /// Asks for Full Disk Access before a scan that would otherwise miss protected folders
     Access(ScanTarget),
     Scanning(Scanning),
     Explorer(Explorer),
 }
 
-/// How the chart divides the folder in focus.
+/// How the chart divides the folder in focus
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChartMode {
-    /// Folders and files sized by the space they take.
+    /// Folders and files sized by the space they take
     Size,
-    /// Folders and files sized by how many files they hold.
+    /// Folders and files sized by how many files they hold
     Count,
-    /// Everything inside, grouped by file type and extension.
+    /// Everything inside, grouped by file type and extension
     Types,
 }
 
-/// Where an update stands.
+/// Where an update stands
 pub enum UpdatePhase {
     Idle,
-    /// A check the user asked for, from the app menu.
+    /// A check the user asked for, from the app menu
     Checking,
-    /// A check the user asked for found nothing newer; shown briefly.
+    /// A check the user asked for found nothing newer; shown briefly
     UpToDate(Instant),
     Available,
     Downloading(Arc<update::Progress>),
-    /// Unpacking and swapping in the new version, just before the restart.
+    /// Unpacking and swapping in the new version, just before the restart
     Installing,
     Failed(String),
 }
 
 pub struct Updater {
     pub phase: UpdatePhase,
-    /// The newer release, once one is found.
+    /// The newer release, once one is found
     pub release: Option<Release>,
-    /// Whether the update card is open below the titlebar's Update button.
+    /// Whether the update card is open below the titlebar's Update button
     pub open: bool,
-    /// The version the card last opened for by itself, so it does so once.
+    /// The version the card last opened for by itself, so it does so once
     prompted: Option<update::Version>,
-    /// When the Update button appeared, for its entrance.
+    /// When the Update button appeared, for its entrance
     pub since: Instant,
     _checks: Option<Task<()>>,
     _job: Option<Task<()>>,
@@ -88,11 +88,11 @@ pub struct CachedScan {
     pub target: ScanTarget,
     pub tree: Tree,
     pub scanned_at: Instant,
-    /// The chart's top ring, kept so the home screen can draw the disk's burr.
+    /// The chart's top ring, kept so the home screen can draw the disk's burr
     pub lobes: Vec<Lobe>,
 }
 
-/// One top-level slice of a scanned disk: its span in turns and chart color.
+/// One top-level slice of a scanned disk: its span in turns and chart color
 #[derive(Clone, Copy)]
 pub struct Lobe {
     pub start: f32,
@@ -107,66 +107,66 @@ pub struct Explorer {
     pub focus: NodeId,
     pub segments: Rc<Vec<Segment>>,
     pub hover: Option<Hover>,
-    /// What was hovered before, kept briefly so highlights cross-fade.
+    /// What was hovered before, kept briefly so highlights cross-fade
     pub prev_hover: Option<Hover>,
     pub hover_since: Instant,
-    /// Folder the sidebar shows while the chart is hovered, instead of the focus.
+    /// Folder the sidebar shows while the chart is hovered, instead of the focus
     pub preview: Option<NodeId>,
     pub chart_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// What a drag starting on the chart would carry, captured at mouse-down.
+    /// What a drag starting on the chart would carry, captured at mouse-down
     pub chart_drag: ChartDrag,
-    /// Mouse is held down on the chart; hover stays frozen until release.
+    /// Mouse is held down on the chart; hover stays frozen until release
     pub pressing: bool,
-    /// When the chart first appeared, for its entrance sweep.
+    /// When the chart first appeared, for its entrance sweep
     pub revealed: Instant,
-    /// Camera move between a folder and its parent or child, while it runs.
+    /// Camera move between a folder and its parent or child, while it runs
     pub zoom: Option<Zoom>,
-    /// Deepest folder visited along the current path; Forward walks back down toward it.
+    /// Deepest folder visited along the current path; Forward walks back down toward it
     pub trail: NodeId,
-    /// Item whose right-click menu is open, and where the click was.
+    /// Item whose right-click menu is open, and where the click was
     pub context: Option<(NodeId, Point<Pixels>)>,
     pub collected: Vec<NodeId>,
     /// The Collector tile being dragged and its preview, whose spot on the shelf
-    /// shows as an empty slot for as long as the preview lives.
+    /// shows as an empty slot for as long as the preview lives
     pub shelf_drag: Option<(NodeId, gpui::AnyWeakView)>,
-    /// How far the shelf is scrolled, where it's easing to, and when it last moved.
+    /// How far the shelf is scrolled, where it's easing to, and when it last moved
     pub shelf_scroll: f32,
     pub shelf_target: f32,
     pub shelf_moved: Instant,
-    /// Until when the shelf keeps scrolling to its end, so a new tile is in view.
+    /// Until when the shelf keeps scrolling to its end, so a new tile is in view
     pub shelf_follow: Option<Instant>,
-    /// The shelf's visible width and its tiles' width; set while painting.
+    /// The shelf's visible width and its tiles' width; set while painting
     pub shelf_widths: Rc<Cell<(f32, f32)>>,
-    /// Where the tray sits, so a dragged tile knows whether it's still over it.
+    /// Where the tray sits, so a dragged tile knows whether it's still over it
     pub tray_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// When "Move to Trash" was pressed; the move starts once the countdown runs out.
+    /// When "Move to Trash" was pressed; the move starts once the countdown runs out
     pub countdown: Option<Instant>,
     pub trashing: bool,
-    /// The move to the Trash under way, or just finished and about to close.
+    /// The move to the Trash under way, or just finished and about to close
     pub trash_job: Option<TrashJob>,
-    /// Keeps the item being moved in view in the manifest.
+    /// Keeps the item being moved in view in the manifest
     pub manifest_scroll: gpui::ScrollHandle,
     pub notice: Option<Notice>,
     pub mode: ChartMode,
-    /// The focus folder grouped by file type, while the chart shows types.
+    /// The focus folder grouped by file type, while the chart shows types
     pub breakdown: Option<Rc<Breakdown>>,
-    /// Type or extension the sidebar shows while the type chart is hovered.
+    /// Type or extension the sidebar shows while the type chart is hovered
     pub group_preview: Option<u32>,
-    /// Type or extension the type chart is opened into, like a folder.
+    /// Type or extension the type chart is opened into, like a folder
     pub group_focus: Option<u32>,
 }
 
-/// One item in a move to the Trash, as it was when the move began.
+/// One item in a move to the Trash, as it was when the move began
 pub struct TrashItem {
     pub name: String,
-    /// The folder it's in.
+    /// The folder it's in
     pub place: String,
     pub size: u64,
     pub kind: NodeKind,
     pub color: Option<gpui::Hsla>,
 }
 
-/// Where each item of a move to the Trash stands, shared with the thread moving them.
+/// Where each item of a move to the Trash stands, shared with the thread moving them
 pub const TRASH_WAITING: u8 = 0;
 pub const TRASH_MOVING: u8 = 1;
 pub const TRASH_MOVED: u8 = 2;
@@ -175,12 +175,12 @@ pub const TRASH_FAILED: u8 = 3;
 pub struct TrashJob {
     pub items: Vec<TrashItem>,
     pub states: Arc<Vec<AtomicU8>>,
-    /// The progress bar's eased share of bytes processed.
+    /// The progress bar's eased share of bytes processed
     pub shown: f32,
     pub finished: Option<Instant>,
 }
 
-/// How long the finished list stays up before it closes and the result shows.
+/// How long the finished list stays up before it closes and the result shows
 pub const TRASH_LINGER: Duration = Duration::from_millis(900);
 
 impl TrashJob {
@@ -192,7 +192,7 @@ impl TrashJob {
         self.items.iter().map(|i| i.size).sum()
     }
 
-    /// Items and bytes dealt with so far, moved or not.
+    /// Items and bytes dealt with so far, moved or not
     pub fn processed(&self) -> (usize, u64) {
         self.items
             .iter()
@@ -206,16 +206,16 @@ impl TrashJob {
     }
 }
 
-/// A path as people write it, without the `\\?\` prefix a canonical Windows path carries.
+/// A path as people write it, without the `\\?\` prefix a canonical Windows path carries
 pub fn display_path(path: &std::path::Path) -> String {
     let text = path.display().to_string();
     text.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(text)
 }
 
-/// The explorer sidebar's starting width.
+/// The explorer sidebar's starting width
 pub const SIDEBAR_WIDTH: f32 = 360.0;
 
-/// A short message shown above the tray, e.g. the result of moving items to the Trash.
+/// A short message shown above the tray, e.g. the result of moving items to the Trash
 #[derive(Clone)]
 pub struct Notice {
     pub text: SharedString,
@@ -224,7 +224,7 @@ pub struct Notice {
 }
 
 pub const NOTICE_DURATION: Duration = Duration::from_secs(6);
-/// Grace period between pressing "Move to Trash" and anything being moved.
+/// Grace period between pressing "Move to Trash" and anything being moved
 pub const TRASH_COUNTDOWN: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -233,7 +233,7 @@ pub enum Hover {
     Target(Target),
 }
 
-/// Payload carried when dragging a file or folder toward the collection tray.
+/// Payload carried when dragging a file or folder toward the collection tray
 #[derive(Clone)]
 pub struct DragItem {
     pub id: NodeId,
@@ -243,12 +243,12 @@ pub struct DragItem {
 }
 
 /// Payload carried when dragging a tile on the Collector's shelf: back out to put it
-/// back, or onto another tile to reorder.
+/// back, or onto another tile to reorder
 #[derive(Clone)]
 pub struct ShelfItem(pub DragItem);
 
 /// Drag payload for the chart. The chart is one element, so the item under the
-/// cursor is resolved when the button goes down rather than at render time.
+/// cursor is resolved when the button goes down rather than at render time
 #[derive(Clone, Default)]
 pub struct ChartDrag(pub Rc<std::cell::RefCell<Option<DragItem>>>);
 
@@ -257,29 +257,29 @@ pub struct Burrdisk {
     pub volumes: Vec<Volume>,
     pub volumes_loaded: bool,
     pub show_all_images: bool,
-    /// When "Show all" was last toggled, for the expand/collapse animation.
+    /// When "Show all" was last toggled, for the expand/collapse animation
     pub images_toggled: Option<Instant>,
-    /// Finished scans kept for this session, by root path.
+    /// Finished scans kept for this session, by root path
     pub scans: HashMap<PathBuf, CachedScan>,
-    /// When the disk list was last shown, for its entrance animation.
+    /// When the disk list was last shown, for its entrance animation
     pub home_since: Instant,
     pub screen: Screen,
-    /// Mount point whose actions menu is open on the home screen.
+    /// Mount point whose actions menu is open on the home screen
     pub menu: Option<PathBuf>,
-    /// Whether macOS lets Burrdisk read protected folders; checked again on activation.
+    /// Whether macOS lets Burrdisk read protected folders; checked again on activation
     pub full_disk_access: bool,
-    /// Width of the explorer's sidebar, as last dragged.
+    /// Width of the explorer's sidebar, as last dragged
     pub sidebar_width: f32,
-    /// The user chose to scan without Full Disk Access this session.
+    /// The user chose to scan without Full Disk Access this session
     pub access_skipped: bool,
-    /// When the access step was opened, for its entrance.
+    /// When the access step was opened, for its entrance
     pub access_since: Instant,
     pub updater: Updater,
     _refresh: Option<Task<()>>,
     _activation: Option<Subscription>,
 }
 
-/// How long "Up to date" stays in the titlebar after a check from the menu.
+/// How long "Up to date" stays in the titlebar after a check from the menu
 const UP_TO_DATE_FOR: Duration = Duration::from_secs(4);
 
 pub const HOVER_FADE: Duration = Duration::from_millis(160);
@@ -314,7 +314,7 @@ impl Burrdisk {
             _refresh: None,
             _activation: None,
         };
-        // Coming back from System Settings is the moment access may have changed.
+        // Coming back from System Settings is the moment access may have changed
         this._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
                 let granted = volumes::has_full_disk_access();
@@ -358,7 +358,7 @@ impl Burrdisk {
         self.scans.get(path).is_some_and(|scan| scan.target.admin)
     }
 
-    /// Opens a previous scan of the target if there is one, otherwise scans it.
+    /// Opens a previous scan of the target if there is one, otherwise scans it
     pub fn open(&mut self, target: ScanTarget, cx: &mut Context<Self>) {
         match self.scans.remove(&target.path) {
             Some(scan) => self.open_explorer(scan.target, scan.tree, scan.scanned_at, cx),
@@ -378,7 +378,7 @@ impl Burrdisk {
         );
     }
 
-    /// Scans a volume from scratch, dropping any cached result, with the latest free space figures.
+    /// Scans a volume from scratch, dropping any cached result, with the latest free space figures
     pub fn rescan_volume(&mut self, volume: Volume, admin: bool, cx: &mut Context<Self>) {
         self.menu = None;
         self.scans.remove(&volume.mount);
@@ -442,7 +442,7 @@ impl Burrdisk {
             return;
         }
         let progress = Arc::new(Progress::default());
-        // An admin scan runs in a root helper that reports through files next to its output.
+        // An admin scan runs in a root helper that reports through files next to its output
         let helper = target.admin.then(scan::HelperFiles::new);
         let job = {
             let progress = progress.clone();
@@ -457,7 +457,7 @@ impl Burrdisk {
             })
         };
 
-        // Repaint progress while the walk runs, then hand the tree to the explorer.
+        // Repaint progress while the walk runs, then hand the tree to the explorer
         let ticker = {
             let progress = progress.clone();
             cx.spawn(async move |this, cx| {
@@ -514,7 +514,7 @@ impl Burrdisk {
         self.open_explorer(target, tree, Instant::now(), cx);
     }
 
-    /// Scans past the Full Disk Access step, for the rest of the session.
+    /// Scans past the Full Disk Access step, for the rest of the session
     pub fn scan_without_access(&mut self, cx: &mut Context<Self>) {
         if let Screen::Access(target) = &self.screen {
             let target = target.clone();
@@ -571,7 +571,7 @@ impl Burrdisk {
     }
 
     pub fn go_home(&mut self, cx: &mut Context<Self>) {
-        // Keep the finished scan so returning to it this session is instant.
+        // Keep the finished scan so returning to it this session is instant
         if let Screen::Explorer(explorer) = std::mem::replace(&mut self.screen, Screen::Home) {
             let lobes = sunburst::layout(&explorer.tree, Tree::ROOT, Measure::Size)
                 .into_iter()
@@ -594,7 +594,7 @@ impl Burrdisk {
         cx.notify();
     }
 
-    /// Looks for a newer release a few seconds after launch, then every few hours.
+    /// Looks for a newer release a few seconds after launch, then every few hours
     fn start_update_checks(&mut self, cx: &mut Context<Self>) {
         if !update::enabled() {
             return;
@@ -613,10 +613,10 @@ impl Burrdisk {
         }));
     }
 
-    /// Checks now, from the app menu, and says so even when there's nothing new.
+    /// Checks now, from the app menu, and says so even when there's nothing new
     pub fn check_for_updates(&mut self, cx: &mut Context<Self>) {
         if !update::enabled() || !matches!(self.updater.phase, UpdatePhase::Idle | UpdatePhase::UpToDate(_)) {
-            // Busy or already found: show what's there.
+            // Busy or already found: show what's there
             self.updater.open = self.updater.release.is_some();
             cx.notify();
             return;
@@ -668,7 +668,7 @@ impl Burrdisk {
                 })
                 .detach();
             }
-            // Background checks fail quietly; the next one may work.
+            // Background checks fail quietly; the next one may work
             Ok(None) => {}
             Err(err) if manual => self.updater.phase = UpdatePhase::Failed(format!("{err:#}")),
             Err(_) => {}
@@ -677,7 +677,7 @@ impl Burrdisk {
     }
 
     /// Opens the update card by itself once per version, and only on the disk
-    /// list, never over a scan or the explorer.
+    /// list, never over a scan or the explorer
     fn prompt_update(&mut self) {
         let Some(release) = &self.updater.release else { return };
         if matches!(self.screen, Screen::Home) && self.updater.prompted != Some(release.version) {
@@ -696,7 +696,7 @@ impl Burrdisk {
         cx.notify();
     }
 
-    /// Downloads, checks and installs the update, then restarts into it.
+    /// Downloads, checks and installs the update, then restarts into it
     pub fn install_update(&mut self, cx: &mut Context<Self>) {
         let Some(release) = self.updater.release.clone() else { return };
         let Some(asset) = release.asset.clone() else { return };
@@ -709,7 +709,7 @@ impl Burrdisk {
                 let progress = progress.clone();
                 async move { update::download(&asset, progress) }
             });
-            // Moves the progress bar along while the download runs.
+            // Moves the progress bar along while the download runs
             let downloaded = loop {
                 let tick = cx.background_executor().timer(Duration::from_millis(100));
                 if progress.done.load(std::sync::atomic::Ordering::Relaxed)
@@ -761,7 +761,7 @@ impl Burrdisk {
     }
 
     /// Whether restarting now would throw something away: a scan underway or kept,
-    /// or Trash work in flight.
+    /// or Trash work in flight
     pub fn update_loses_scans(&self) -> bool {
         !self.scans.is_empty() || !matches!(self.screen, Screen::Home | Screen::Access(_))
     }
@@ -770,12 +770,12 @@ impl Burrdisk {
         matches!(&self.screen, Screen::Explorer(e) if e.countdown.is_some() || e.trashing)
     }
 
-    /// Rescans whatever the explorer is showing, the same way it was scanned before.
+    /// Rescans whatever the explorer is showing, the same way it was scanned before
     pub fn rescan(&mut self, cx: &mut Context<Self>) {
         if let Screen::Explorer(explorer) = &self.screen {
             let mut target = explorer.target.clone();
             if let Some(volume) = &target.volume {
-                // Pick up the latest free space figures.
+                // Pick up the latest free space figures
                 if let Some(fresh) = volumes::list().into_iter().find(|v| v.mount == volume.mount) {
                     target.volume = Some(fresh);
                 }
@@ -808,7 +808,7 @@ impl Burrdisk {
         }
     }
 
-    /// Steps up to the parent folder; from the disk's top folder, back to the disk list.
+    /// Steps up to the parent folder; from the disk's top folder, back to the disk list
     pub fn go_back(&mut self, cx: &mut Context<Self>) {
         if matches!(self.screen, Screen::Access(_)) {
             self.go_home(cx);
@@ -828,7 +828,7 @@ impl Burrdisk {
         }
     }
 
-    /// Steps one folder down, toward where Back came from, or into a lone subfolder.
+    /// Steps one folder down, toward where Back came from, or into a lone subfolder
     pub fn go_forward(&mut self, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer() else { return };
         if let Some(next) = explorer.next_folder() {
@@ -845,7 +845,7 @@ impl Burrdisk {
         self.go_forward(cx);
     }
 
-    /// The item Space and ⌘⌫ act on: the one with its menu open, else the one hovered.
+    /// The item Space and ⌘⌫ act on: the one with its menu open, else the one hovered
     fn keyboard_target(&mut self) -> Option<NodeId> {
         let explorer = self.explorer()?;
         explorer.context.map(|(id, _)| id).or_else(|| explorer.hovered_node())
@@ -928,7 +928,7 @@ impl Burrdisk {
                         }
                     }
                 }
-                // Never leave the view focused on something that no longer exists.
+                // Never leave the view focused on something that no longer exists
                 if !explorer.tree.is_attached(explorer.focus) {
                     explorer.focus = Tree::ROOT;
                     explorer.zoom = None;
@@ -951,7 +951,7 @@ impl Burrdisk {
                 explorer.zoom = None;
                 explorer.relayout();
                 cx.notify();
-                // The result shows once the list of what moved has closed.
+                // The result shows once the list of what moved has closed
                 let error = !failed.is_empty();
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(TRASH_LINGER).await;
@@ -984,7 +984,7 @@ impl Burrdisk {
         .detach();
     }
 
-    /// Starts the grace period before the collected items move to the Trash.
+    /// Starts the grace period before the collected items move to the Trash
     pub fn start_trash_countdown(&mut self, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer() else { return };
         if explorer.collected.is_empty() || explorer.trashing {
@@ -996,7 +996,7 @@ impl Burrdisk {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(TRASH_COUNTDOWN).await;
             this.update(cx, |this, cx| {
-                // Only the countdown that is still running gets to fire.
+                // Only the countdown that is still running gets to fire
                 if this.explorer().is_some_and(|e| e.countdown == Some(started)) {
                     this.move_collected_to_trash(cx);
                 }
@@ -1015,7 +1015,7 @@ impl Burrdisk {
 }
 
 impl Explorer {
-    /// The focused folder's single subfolder, when there is exactly one.
+    /// The focused folder's single subfolder, when there is exactly one
     pub fn only_subfolder(&self) -> Option<NodeId> {
         let mut dirs = self
             .tree
@@ -1028,7 +1028,7 @@ impl Explorer {
         dirs.next().is_none().then_some(first)
     }
 
-    /// The folder Forward opens: the next one down the trail, else a lone subfolder.
+    /// The folder Forward opens: the next one down the trail, else a lone subfolder
     pub fn next_folder(&self) -> Option<NodeId> {
         if self.group_focus.is_some() {
             return None;
@@ -1048,23 +1048,23 @@ impl Explorer {
         }
     }
 
-    /// Rings in the current chart.
+    /// Rings in the current chart
     pub fn rings(&self) -> usize {
         match (self.mode, &self.breakdown, self.group_focus) {
-            // An opened type has fewer levels below it; keep at least two ring widths.
+            // An opened type has fewer levels below it; keep at least two ring widths
             (ChartMode::Types, Some(breakdown), Some(g)) => (sunburst::TYPE_RINGS - 1 - breakdown.level(g)).max(2),
             (ChartMode::Types, ..) => sunburst::TYPE_RINGS,
             _ => sunburst::RINGS,
         }
     }
 
-    /// The breakdown group the type chart starts from.
+    /// The breakdown group the type chart starts from
     pub fn group_root(&self) -> u32 {
         self.group_focus.unwrap_or(Breakdown::ROOT)
     }
 
     /// Opens a file type or extension in the type chart, like opening a folder.
-    /// `None` returns to the whole folder.
+    /// `None` returns to the whole folder
     pub fn open_group(&mut self, group: Option<u32>) {
         let group = group.filter(|g| *g != Breakdown::ROOT);
         if group == self.group_focus {
@@ -1080,7 +1080,7 @@ impl Explorer {
     }
 
     /// Steps the type chart out to the enclosing type, or back to the whole folder.
-    /// Returns false when no type is open.
+    /// Returns false when no type is open
     pub fn group_up(&mut self) -> bool {
         let Some(g) = self.group_focus else { return false };
         let parent = self.breakdown.as_ref().and_then(|b| b.group(g).parent);
@@ -1116,14 +1116,14 @@ impl Explorer {
         }
         self.group_focus = None;
         if self.mode == ChartMode::Types {
-            // The type chart is rebuilt for the new folder and sweeps in again.
+            // The type chart is rebuilt for the new folder and sweeps in again
             self.zoom = None;
             self.revealed = Instant::now();
         } else {
             self.zoom = Zoom::new(&self.tree, self.focus, id, self.measure());
         }
         self.focus = id;
-        // Going up keeps the trail; going anywhere off it starts a new one.
+        // Going up keeps the trail; going anywhere off it starts a new one
         if !self.tree.is_ancestor(id, self.trail) {
             self.trail = id;
         }
@@ -1136,11 +1136,11 @@ impl Explorer {
     }
 
     /// Hover coming from the chart also previews the hovered folder in the sidebar
-    /// (or, for a file, the folder it's in).
+    /// (or, for a file, the folder it's in)
     pub fn set_chart_hover(&mut self, hover: Option<Hover>) {
         self.set_hover(hover);
         if let Some(breakdown) = &self.breakdown {
-            // Types list their extensions, extensions their biggest items.
+            // Types list their extensions, extensions their biggest items
             self.group_preview = match hover {
                 Some(Hover::Target(Target::Group(g) | Target::GroupRest(g))) => Some(g),
                 Some(Hover::Target(Target::Node(id))) => breakdown.group_of_file(id),
@@ -1158,7 +1158,7 @@ impl Explorer {
         self.preview = folder.filter(|f| *f != self.focus);
     }
 
-    /// The folder whose contents the sidebar lists.
+    /// The folder whose contents the sidebar lists
     pub fn listed(&self) -> NodeId {
         self.preview.unwrap_or(self.focus)
     }
@@ -1172,12 +1172,12 @@ impl Explorer {
         self.hover_since = Instant::now();
     }
 
-    /// 0..1 progress of the latest hover change.
+    /// 0..1 progress of the latest hover change
     pub fn hover_progress(&self) -> f32 {
         sunburst::ease_out_cubic((self.hover_since.elapsed().as_secs_f32() / HOVER_FADE.as_secs_f32()).min(1.0))
     }
 
-    /// Whether the chart still needs frames. Clears a finished zoom as a side effect.
+    /// Whether the chart still needs frames. Clears a finished zoom as a side effect
     pub fn tick(&mut self) -> bool {
         if self.zoom.as_ref().is_some_and(|z| z.finished()) {
             self.zoom = None;
@@ -1193,10 +1193,10 @@ impl Explorer {
     }
 
     pub fn relayout(&mut self) {
-        // Group numbers belong to one breakdown; a rebuilt one invalidates them.
+        // Group numbers belong to one breakdown; a rebuilt one invalidates them
         self.group_preview = None;
         if self.mode == ChartMode::Types {
-            // Keep an opened type open across a rebuild (after a move to the Trash), if it still exists.
+            // Keep an opened type open across a rebuild (after a move to the Trash), if it still exists
             let opened = self.breakdown.as_ref().zip(self.group_focus).map(|(old, g)| {
                 let group = old.group(g);
                 let ext = (old.level(g) == 1).then(|| group.name.clone());
@@ -1215,7 +1215,7 @@ impl Explorer {
         }
     }
 
-    /// Adds an item to the tray, keeping the set free of nested duplicates.
+    /// Adds an item to the tray, keeping the set free of nested duplicates
     pub fn collect(&mut self, id: NodeId) {
         if self.tree.node(id).kind == NodeKind::Hidden || id == Tree::ROOT {
             return;
@@ -1226,12 +1226,12 @@ impl Explorer {
         let tree = &self.tree;
         self.collected.retain(|c| !tree.is_ancestor(id, *c));
         self.collected.push(id);
-        // Bring the new tile into view.
+        // Bring the new tile into view
         if self.shelf_scroll == self.shelf_target {
             self.shelf_moved = Instant::now();
         }
         self.shelf_follow = Some(Instant::now() + Duration::from_millis(400));
-        // Changing the pile mid-countdown stops it, so nothing moves that wasn't reviewed.
+        // Changing the pile mid-countdown stops it, so nothing moves that wasn't reviewed
         self.countdown = None;
     }
 
@@ -1240,12 +1240,12 @@ impl Explorer {
         self.countdown = None;
     }
 
-    /// Tile being dragged off the shelf, while its drag lasts.
+    /// Tile being dragged off the shelf, while its drag lasts
     pub fn shelf_dragging(&self) -> Option<NodeId> {
         self.shelf_drag.as_ref().filter(|(_, view)| view.upgrade().is_some()).map(|(id, _)| *id)
     }
 
-    /// How far the shelf can scroll.
+    /// How far the shelf can scroll
     pub fn shelf_room(&self) -> f32 {
         let (visible, content) = self.shelf_widths.get();
         (content - visible).max(0.)
@@ -1253,14 +1253,14 @@ impl Explorer {
 
     pub fn scroll_shelf(&mut self, by: f32) {
         if self.shelf_scroll == self.shelf_target {
-            // Starting from rest; don't count the idle time as a frame.
+            // Starting from rest; don't count the idle time as a frame
             self.shelf_moved = Instant::now();
         }
         self.shelf_follow = None;
         self.shelf_target = (self.shelf_target + by).clamp(0., self.shelf_room());
     }
 
-    /// Eases the move's progress bar, and closes the list once it has lingered.
+    /// Eases the move's progress bar, and closes the list once it has lingered
     fn tick_trash(&mut self) -> bool {
         let Some(job) = &mut self.trash_job else { return false };
         if job.finished.is_some_and(|at| at.elapsed() >= TRASH_LINGER) {
@@ -1273,7 +1273,7 @@ impl Explorer {
         true
     }
 
-    /// Eases the shelf toward where it's headed. Whether it's still moving.
+    /// Eases the shelf toward where it's headed. Whether it's still moving
     fn tick_shelf(&mut self) -> bool {
         if self.shelf_follow.is_some_and(|until| Instant::now() < until) {
             self.shelf_target = self.shelf_room();
@@ -1288,7 +1288,7 @@ impl Explorer {
         self.shelf_scroll != self.shelf_target || self.shelf_follow.is_some()
     }
 
-    /// Moves a collected item to where `before` sits on the shelf, or to the end.
+    /// Moves a collected item to where `before` sits on the shelf, or to the end
     pub fn move_collected(&mut self, id: NodeId, before: Option<NodeId>) {
         if before == Some(id) || !self.collected.contains(&id) {
             return;
@@ -1332,7 +1332,7 @@ impl Explorer {
 }
 
 /// Opens a Quick Look panel for a file or folder, as Space does in Finder.
-/// Windows has no Quick Look, so there Preview isn't offered at all.
+/// Windows has no Quick Look, so there Preview isn't offered at all
 pub fn quick_look(path: &std::path::Path) {
     #[cfg(windows)]
     let _ = path;
@@ -1346,14 +1346,14 @@ pub fn quick_look(path: &std::path::Path) {
         .ok();
 }
 
-/// Opens Terminal in a folder, or in the folder holding a file.
+/// Opens Terminal in a folder, or in the folder holding a file
 pub fn open_in_terminal(path: &std::path::Path) {
     let dir = if path.is_dir() { path } else { path.parent().unwrap_or(path) };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NEW_CONSOLE: u32 = 0x10;
-        // Windows Terminal if it's installed, else a plain console.
+        // Windows Terminal if it's installed, else a plain console
         if std::process::Command::new("wt.exe").arg("-d").arg(dir).spawn().is_err() {
             std::process::Command::new("cmd.exe")
                 .current_dir(dir)
@@ -1369,7 +1369,7 @@ pub fn open_in_terminal(path: &std::path::Path) {
 /// Moves files and folders to the Trash. The Foundation API is tried first; whatever
 /// it refuses (it does when ~/.Trash has the wrong owner, among other cases) is
 /// handed to Finder in one batch, which is what a drag to the Trash would do.
-/// Moves each item to the Trash, marking its spot in `states` as it goes.
+/// Moves each item to the Trash, marking its spot in `states` as it goes
 fn move_to_trash(items: Vec<(NodeId, PathBuf)>, states: &Arc<Vec<AtomicU8>>) -> Vec<(NodeId, Result<(), String>)> {
     let mark = |ix: usize, state: u8| states[ix].store(state, Ordering::Relaxed);
     #[cfg(target_os = "macos")]
@@ -1383,7 +1383,7 @@ fn move_to_trash(items: Vec<(NodeId, PathBuf)>, states: &Arc<Vec<AtomicU8>>) -> 
             .map(|(ix, (id, path))| {
                 mark(ix, TRASH_MOVING);
                 let ok = context.delete(&path).is_ok();
-                // Refused items wait for Finder to have a go.
+                // Refused items wait for Finder to have a go
                 mark(ix, if ok { TRASH_MOVED } else { TRASH_WAITING });
                 (ix, id, path, ok)
             })
@@ -1402,7 +1402,7 @@ fn move_to_trash(items: Vec<(NodeId, PathBuf)>, states: &Arc<Vec<AtomicU8>>) -> 
                 other => other.to_string(),
             });
             for (ix, id, path, _) in refused {
-                // Finder works on the batch as a whole; check what actually left.
+                // Finder works on the batch as a whole; check what actually left
                 let result = match &outcome {
                     Ok(()) => Ok(()),
                     Err(_) if !path.exists() => Ok(()),
@@ -1433,7 +1433,7 @@ fn move_to_trash(items: Vec<(NodeId, PathBuf)>, states: &Arc<Vec<AtomicU8>>) -> 
         };
         // On Windows, `trash` sets up single-threaded COM and panics on a thread that
         // already runs multithreaded COM, as the thread pool behind background tasks
-        // does. A thread of its own always starts clean.
+        // does. A thread of its own always starts clean
         if cfg!(windows) {
             std::thread::spawn(run).join().unwrap_or_else(|_| {
                 ids.into_iter().map(|id| (id, Err("the system refused".to_string()))).collect()
@@ -1444,7 +1444,7 @@ fn move_to_trash(items: Vec<(NodeId, PathBuf)>, states: &Arc<Vec<AtomicU8>>) -> 
     }
 }
 
-/// Resolves to `Some` when `job` finishes first, or `None` when `tick` does.
+/// Resolves to `Some` when `job` finishes first, or `None` when `tick` does
 async fn futures_select<T>(
     job: &mut std::pin::Pin<&mut impl std::future::Future<Output = T>>,
     tick: Task<()>,
@@ -1485,7 +1485,7 @@ impl Render for Burrdisk {
             .on_action(cx.listener(Self::on_preview))
             .on_action(cx.listener(Self::on_collect))
             .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| this.check_for_updates(cx)))
-            // The mouse's side buttons (and two-finger swipes) step back and forward.
+            // The mouse's side buttons (and two-finger swipes) step back and forward
             .on_mouse_down(
                 MouseButton::Navigate(NavigationDirection::Back),
                 cx.listener(|this, _, _, cx| this.go_back(cx)),

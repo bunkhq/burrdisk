@@ -5,7 +5,7 @@ use gpui::{AssetSource, SharedString};
 
 pub struct Assets;
 
-/// Mona Sans (SIL Open Font License, see `assets/fonts/OFL.txt`), the app's one typeface.
+/// Mona Sans (SIL Open Font License, see `assets/fonts/OFL.txt`), the app's one typeface
 pub const FONTS: &[&[u8]] = &[
     include_bytes!("../assets/fonts/MonaSans-Regular.ttf"),
     include_bytes!("../assets/fonts/MonaSans-Medium.ttf"),

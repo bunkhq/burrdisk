@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "assets" / "icon"
 
 # Folder shares of the drawn disk, largest first. Five lobes read as a burr,
-# not a sun, and stay distinct down to 32px.
+# not a sun, and stay distinct down to 32px
 SHARES = [0.34, 0.22, 0.18, 0.14, 0.12]
 
 
@@ -106,7 +106,7 @@ def burr(cx, cy, reach, core_ratio, spines_total, base_half, tip_half, bead, rim
                 )
             index += 1
         at += share
-    # The seed core: warm dark, lit from above, with the cached-scan Ember rim.
+    # The seed core: warm dark, lit from above, with the cached-scan Ember rim
     out.append(
         f'<radialGradient id="core" cx="{cx:.2f}" cy="{cy - r0 * 0.45:.2f}" r="{r0 * 1.45:.2f}" gradientUnits="userSpaceOnUse">'
         f'<stop offset="0" stop-color="#3a302b"/><stop offset="1" stop-color="#1c1714"/></radialGradient>'
@@ -121,7 +121,7 @@ def burr(cx, cy, reach, core_ratio, spines_total, base_half, tip_half, bead, rim
 
 GRAIN = (
     # Gray noise laid over the plate at a few percent, to dither its dark gradient
-    # (8-bit steps would otherwise show as bands).
+    # (8-bit steps would otherwise show as bands)
     '<filter id="grain" x="0" y="0" width="100%" height="100%">'
     '<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7"/>'
     '<feColorMatrix values="1 0 0 0 0  1 0 0 0 0  1 0 0 0 0  0 0 0 0 1"/></filter>'
@@ -178,7 +178,7 @@ def mac(size_class="large"):
 
 
 # One burr per size range, in 256 units scaled by `k`. Small sizes drop the hooks
-# and thin spines, which would only blur, and keep color and silhouette.
+# and thin spines, which would only blur, and keep color and silhouette
 MARKS = {
     "large": lambda cx, cy, k: burr(cx, cy, 80 * k, 0.34, 76, 2.1 * k, 0.55 * k, 1.25 * k, 1.7 * k),
     "medium": lambda cx, cy, k: burr(cx, cy, 86 * k, 0.37, 34, 4.2 * k, 1.4 * k, 0, 3.2 * k, jitter=0.03),

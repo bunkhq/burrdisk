@@ -1,27 +1,27 @@
-//! Names and helpers that differ between macOS and Windows.
+//! Names and helpers that differ between macOS and Windows
 
-/// The system file manager, as in "Show in Finder".
+/// The system file manager, as in "Show in Finder"
 pub const FILE_MANAGER: &str = if cfg!(windows) { "File Explorer" } else { "Finder" };
 
-/// Where deleted items go.
+/// Where deleted items go
 pub const TRASH: &str = if cfg!(windows) { "Recycle Bin" } else { "Trash" };
 
-/// The menu item that opens the system's info window for a disk.
+/// The menu item that opens the system's info window for a disk
 pub const GET_INFO: &str = if cfg!(windows) { "Properties" } else { "Get Info" };
 
-/// Key hint for moving the hovered item to the Collector.
+/// Key hint for moving the hovered item to the Collector
 pub const COLLECT_KEYS: &str = if cfg!(target_os = "macos") { "\u{2318}\u{232b}" } else { "Ctrl+Backspace" };
 
 /// Room at the left of a title bar for the macOS window buttons. Windows draws
-/// its caption buttons at the right instead (see `window_controls`).
+/// its caption buttons at the right instead (see `window_controls`)
 pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 76. } else { 0. };
 
 /// Padding at the right end of a title bar. Windows' caption buttons sit flush
-/// against the window edge, as the system's own do.
+/// against the window edge, as the system's own do
 pub const TITLEBAR_END: f32 = if cfg!(windows) { 0. } else { 16. };
 
 /// Runs `verb` on `path` through the Windows shell, as a double-click or a context
-/// menu item in File Explorer would. Returns the started process, if any.
+/// menu item in File Explorer would. Returns the started process, if any
 #[cfg(windows)]
 pub fn shell_execute(
     verb: &str,

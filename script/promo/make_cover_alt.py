@@ -26,7 +26,7 @@ from make_icons import oklch  # noqa: E402
 
 CX = W / 2
 
-# Button glyphs from assets/icons, as the app's buttons use them.
+# Button glyphs from assets/icons, as the app's buttons use them
 ICONS.update({
     "open": '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
     "scan": '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/>'
@@ -291,7 +291,7 @@ def explorer_window(tray=None, chart=(92, 74)):
         )
     ty = h - 80
     body += f'<rect x="0" y="{ty}" width="{w}" height="80" fill="url(#tray)"/><rect x="0" y="{ty}" width="{w}" height="1" fill="#ffffff" fill-opacity="0.07"/>'
-    # The sidebar and the tray run to the window's edges; its corners round them off.
+    # The sidebar and the tray run to the window's edges; its corners round them off
     clip = f'<clipPath id="winclip"><rect width="{w}" height="{h}" rx="14"/></clipPath>'
     if tray:
         return w, h, chrome(w, h, title) + clip + f'<g clip-path="url(#winclip)">{body}{tray(w, ty)}</g>' + edge(w, h)

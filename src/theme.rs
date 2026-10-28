@@ -1,6 +1,6 @@
 use gpui::{Hsla, Rgba, rgb, rgba};
 
-// A quiet, warm-neutral dark palette. Color is reserved for data.
+// A quiet, warm-neutral dark palette. Color is reserved for data
 pub fn bg() -> Rgba {
     rgb(0x141416)
 }
@@ -47,7 +47,7 @@ pub fn track() -> Rgba {
     rgba(0xffffff14)
 }
 
-/// Fill level color: calm when there's room, warmer as the disk fills.
+/// Fill level color: calm when there's room, warmer as the disk fills
 pub fn fullness(ratio: f32) -> Hsla {
     let hue = if ratio < 0.7 {
         0.40

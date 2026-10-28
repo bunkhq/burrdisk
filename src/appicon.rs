@@ -1,7 +1,7 @@
 //! The icon of the app that opens a kind of file, shown beside files of that kind in
 //! place of the generic type glyph. Each extension is looked up once, off the UI
 //! thread; until its icon arrives, or when no app claims the extension, callers fall
-//! back to the vector glyph.
+//! back to the vector glyph
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ use crate::filetype::{self, Category};
 use crate::scan::NodeKind;
 
 /// Pixel size icons are fetched at: sharp at the sizes they're drawn (13–22pt) on
-/// 2× screens and at Windows' 1.2× scale.
+/// 2× screens and at Windows' 1.2× scale
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 const SIZE: u32 = 64;
 
@@ -27,13 +27,13 @@ thread_local! {
 }
 
 /// The icon of the app that opens `name`, if one is known yet. A miss starts the
-/// lookup and repaints the windows once it lands.
+/// lookup and repaints the windows once it lands
 pub fn for_item(name: &str, kind: NodeKind, cx: &mut App) -> Option<Arc<RenderImage>> {
     let ext = extension_for(name, kind)?;
     for_extension(&ext, cx)
 }
 
-/// The same, for a bare extension like "mp4".
+/// The same, for a bare extension like "mp4"
 pub fn for_extension(ext: &str, cx: &mut App) -> Option<Arc<RenderImage>> {
     let hit = CACHE.with(|c| match c.borrow().get(ext) {
         Some(Slot::Ready(icon)) => Some(icon.clone()),
@@ -65,7 +65,7 @@ pub fn for_extension(ext: &str, cx: &mut App) -> Option<Arc<RenderImage>> {
 }
 
 /// The extension to look up for an item, or `None` when the generic glyph says more:
-/// folders, apps and other programs (which open themselves), and Hidden space.
+/// folders, apps and other programs (which open themselves), and Hidden space
 pub fn extension_for(name: &str, kind: NodeKind) -> Option<String> {
     match filetype::category(name, kind) {
         Category::Folder | Category::Program | Category::Hidden => None,
@@ -73,7 +73,7 @@ pub fn extension_for(name: &str, kind: NodeKind) -> Option<String> {
     }
 }
 
-/// Straight-alpha BGRA pixels, as GPUI draws them.
+/// Straight-alpha BGRA pixels, as GPUI draws them
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
 fn image(width: u32, height: u32, bgra: Vec<u8>) -> Option<RenderImage> {
     let buffer = image::RgbaImage::from_raw(width, height, bgra)?;
@@ -83,7 +83,7 @@ fn image(width: u32, height: u32, bgra: Vec<u8>) -> Option<RenderImage> {
 #[cfg(windows)]
 fn load(ext: &str) -> Option<RenderImage> {
     use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
-    // Shell lookups want COM; balance whatever this thread didn't already have.
+    // Shell lookups want COM; balance whatever this thread didn't already have
     let initialized = unsafe { CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32) } >= 0;
     let icon = windows::app_icon(ext);
     if initialized {
@@ -110,7 +110,7 @@ mod windows {
 
     use super::SIZE;
 
-    /// Programs that stand in for "no app", or host one, rather than open the file.
+    /// Programs that stand in for "no app", or host one, rather than open the file
     const HOSTS: &[&str] = &["openwith.exe", "rundll32.exe", "dllhost.exe", "explorer.exe", "cmd.exe"];
 
     fn wide(s: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
@@ -141,7 +141,7 @@ mod windows {
                 return Some(icon);
             }
         }
-        // Store apps have no program file to read; they name a logo resource instead.
+        // Store apps have no program file to read; they name a logo resource instead
         store_logo(ext)
     }
 
@@ -159,7 +159,7 @@ mod windows {
     }
 
     /// An icon's pixels as straight-alpha BGRA. Old icons without an alpha channel
-    /// take their transparency from the mask.
+    /// take their transparency from the mask
     fn icon_pixels(icon: HICON) -> Option<(u32, u32, Vec<u8>)> {
         let mut info: ICONINFO = unsafe { std::mem::zeroed() };
         if unsafe { GetIconInfo(icon, &mut info) } == 0 {
@@ -179,7 +179,7 @@ mod windows {
             bmi.bmiHeader = BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: w as i32,
-                // Negative height asks for rows top to bottom.
+                // Negative height asks for rows top to bottom
                 biHeight: -(h as i32),
                 biPlanes: 1,
                 biBitCount: 32,
@@ -212,7 +212,7 @@ mod windows {
         Some((w, h, bgra))
     }
 
-    /// A Store app's logo: its icon reference resolves to a PNG inside the package.
+    /// A Store app's logo: its icon reference resolves to a PNG inside the package
     fn store_logo(ext: &str) -> Option<RenderImage> {
         let reference = assoc(ext, ASSOCSTR_APPICONREFERENCE)?;
         if !reference.starts_with('@') {
@@ -227,7 +227,7 @@ mod windows {
         let end = buf.iter().position(|c| *c == 0).unwrap_or(buf.len());
         let path = PathBuf::from(String::from_utf16_lossy(&buf[..end]));
         let mut rgba = image::open(&path).ok()?.into_rgba8();
-        // Logos come larger than needed; scale down so a list of them stays light.
+        // Logos come larger than needed; scale down so a list of them stays light
         if rgba.width() > SIZE * 2 {
             rgba = image::imageops::resize(&rgba, SIZE, SIZE, image::imageops::FilterType::Triangle);
         }
@@ -339,7 +339,7 @@ mod macos {
             };
             let _: () = msg_send![rep, release];
             let mut bgra = pixels?;
-            // The bitmap is premultiplied RGBA; GPUI wants straight BGRA.
+            // The bitmap is premultiplied RGBA; GPUI wants straight BGRA
             for pixel in bgra.as_chunks_mut::<4>().0 {
                 let a = pixel[3] as u32;
                 if a > 0 && a < 255 {

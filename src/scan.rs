@@ -17,34 +17,34 @@ pub enum NodeKind {
     Dir,
     File,
     /// Space the volume reports as used that the scan couldn't attribute to any file
-    /// (snapshots, system files we can't read, other APFS volumes in the container).
+    /// (snapshots, system files we can't read, other APFS volumes in the container)
     Hidden,
 }
 
-/// One item of a [`Tree`], borrowed from it.
+/// One item of a [`Tree`], borrowed from it
 #[derive(Clone, Copy, Debug)]
 pub struct Node<'a> {
     pub name: &'a str,
     pub size: u64,
-    /// Files inside (1 for a file); folders themselves aren't counted.
+    /// Files inside (1 for a file); folders themselves aren't counted
     pub items: u64,
     pub kind: NodeKind,
     pub parent: Option<NodeId>,
-    /// Sorted largest first.
+    /// Sorted largest first
     pub children: &'a [NodeId],
 }
 
 const NO_PARENT: u32 = u32::MAX;
 
 /// How a node is stored: 40 bytes, with its name in `Tree::names` and its children's
-/// ids in `Tree::kids`, so a scan of millions of files makes no allocation per file.
+/// ids in `Tree::kids`, so a scan of millions of files makes no allocation per file
 struct Slot {
     size: u64,
     items: u64,
     name: u32,
     name_len: u32,
     parent: u32,
-    /// The node's children are `kids[first..first + count]`.
+    /// The node's children are `kids[first..first + count]`
     first: u32,
     count: u32,
     kind: NodeKind,
@@ -55,7 +55,7 @@ pub struct Tree {
     names: String,
     kids: Vec<NodeId>,
     root_path: PathBuf,
-    /// How long the scan took.
+    /// How long the scan took
     pub duration: Duration,
 }
 
@@ -94,7 +94,7 @@ impl Tree {
         path
     }
 
-    /// Ancestors from the root down to (and including) `id`.
+    /// Ancestors from the root down to (and including) `id`
     pub fn lineage(&self, id: NodeId) -> Vec<NodeId> {
         let mut out = vec![id];
         let mut cursor = self.node(id).parent;
@@ -119,13 +119,13 @@ impl Tree {
     }
 
     /// Whether a node is still reachable from the root. It isn't once it, or any
-    /// folder it was in, is removed.
+    /// folder it was in, is removed
     pub fn is_attached(&self, id: NodeId) -> bool {
         let lineage = self.lineage(id);
         lineage[0] == Self::ROOT && lineage.windows(2).all(|w| self.node(w[0]).children.contains(&w[1]))
     }
 
-    /// Detaches a node after its files were deleted, shrinking every ancestor.
+    /// Detaches a node after its files were deleted, shrinking every ancestor
     pub fn remove(&mut self, id: NodeId) {
         let Some(parent) = self.node(id).parent else {
             return;
@@ -146,7 +146,7 @@ impl Tree {
             slot.items = slot.items.saturating_sub(items);
             cursor = self.node(current).parent;
         }
-        // Every folder up the chain shrank, so each may now rank lower among its siblings.
+        // Every folder up the chain shrank, so each may now rank lower among its siblings
         let mut cursor = self.node(parent).parent;
         while let Some(current) = cursor {
             self.sort_children(current);
@@ -162,7 +162,7 @@ impl Tree {
         self.kids[first..first + count].sort_by(|a, b| slots[*b as usize].size.cmp(&slots[*a as usize].size));
     }
 
-    /// Adds a pseudo-entry for space the scan could not see.
+    /// Adds a pseudo-entry for space the scan could not see
     pub fn add_hidden_space(&mut self, size: u64) {
         const NAME: &str = "Hidden space";
         let id = self.slots.len() as NodeId;
@@ -177,7 +177,7 @@ impl Tree {
             kind: NodeKind::Hidden,
         });
         self.names.push_str(NAME);
-        // The root's children move to the end of `kids`, where there is room for one more.
+        // The root's children move to the end of `kids`, where there is room for one more
         let root = &self.slots[Self::ROOT as usize];
         let (first, count) = (root.first as usize, root.count as usize);
         let moved = self.kids.len();
@@ -211,21 +211,21 @@ impl Progress {
 
 /// A folder's listing, built during the parallel walk and flattened into a `Tree`
 /// afterwards. Its children's names share one string, so a file costs a 24-byte
-/// record instead of a record plus an allocation of its own.
+/// record instead of a record plus an allocation of its own
 #[derive(Default)]
 struct Dir {
     names: String,
     children: Vec<Child>,
-    /// Totals of the children's sizes and file counts.
+    /// Totals of the children's sizes and file counts
     size: u64,
     items: u64,
 }
 
 struct Child {
     /// Where this child's name ends in its folder's `names`. It starts where the
-    /// previous child's ends.
+    /// previous child's ends
     name_end: u32,
-    /// For a folder, its own size plus everything inside.
+    /// For a folder, its own size plus everything inside
     size: u64,
     dir: Option<Box<Dir>>,
 }
@@ -237,7 +237,7 @@ impl Child {
 }
 
 struct Walker<'a> {
-    // Device and hard link checks need inode numbers, which only Unix exposes.
+    // Device and hard link checks need inode numbers, which only Unix exposes
     #[cfg_attr(not(unix), allow(dead_code))]
     devices: Vec<u64>,
     skip: Vec<PathBuf>,
@@ -246,7 +246,7 @@ struct Walker<'a> {
     progress: &'a Progress,
 }
 
-/// Scans `root` and returns its size tree, or `None` if cancelled.
+/// Scans `root` and returns its size tree, or `None` if cancelled
 pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Option<Tree> {
     let started = Instant::now();
     let walker = Walker {
@@ -277,14 +277,14 @@ impl Walker<'_> {
             let _ = write!(current, "{}", dir.display());
         }
 
-        // Subfolders to walk next: where each sits in `children`, its path, its own size.
+        // Subfolders to walk next: where each sits in `children`, its path, its own size
         let mut subdirs = Vec::new();
         let (mut files, mut bytes) = (0, 0);
         for item in read_dir.flatten() {
             if self.progress.is_cancelled() {
                 return Dir::default();
             }
-            // On Unix this is an lstat, so symlinks are never followed.
+            // On Unix this is an lstat, so symlinks are never followed
             let Ok(meta) = item.metadata() else { continue };
             let size = if meta.file_type().is_dir() {
                 let path = item.path();
@@ -320,7 +320,7 @@ impl Walker<'_> {
         out.size = out.children.iter().map(|c| c.size).sum();
         out.items = out.children.iter().map(Child::items).sum();
         // Growing buffers leave up to half their room empty; hand it back before the
-        // whole walk is held in memory at once.
+        // whole walk is held in memory at once
         out.names.shrink_to_fit();
         out.children.shrink_to_fit();
         out
@@ -337,7 +337,7 @@ impl Walker<'_> {
         true
     }
 
-    /// Hard-linked files are counted once, at the first path we meet them.
+    /// Hard-linked files are counted once, at the first path we meet them
     #[cfg(unix)]
     fn first_link(&self, meta: &fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt;
@@ -356,7 +356,7 @@ impl Walker<'_> {
     }
 }
 
-/// Bytes actually allocated on disk, so sparse and compressed files count correctly.
+/// Bytes actually allocated on disk, so sparse and compressed files count correctly
 #[cfg(unix)]
 fn allocated(meta: &fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
@@ -374,7 +374,7 @@ fn file_allocated(meta: &fs::Metadata, _item: &fs::DirEntry) -> u64 {
 }
 
 /// A file's size on disk. Most files take their length; cloud placeholders (OneDrive
-/// files kept online only), compressed and sparse files ask NTFS what they really use.
+/// files kept online only), compressed and sparse files ask NTFS what they really use
 #[cfg(windows)]
 fn file_allocated(meta: &fs::Metadata, item: &fs::DirEntry) -> u64 {
     use std::os::windows::ffi::OsStrExt;
@@ -402,7 +402,7 @@ fn file_allocated(meta: &fs::Metadata, item: &fs::DirEntry) -> u64 {
 }
 
 /// Devices the scan may enter. On macOS the startup disk is split into a read-only
-/// system volume and a data volume joined by firmlinks; both belong to one scan.
+/// system volume and a data volume joined by firmlinks; both belong to one scan
 #[cfg(unix)]
 fn devices_for(root: &Path) -> Vec<u64> {
     use std::os::unix::fs::MetadataExt;
@@ -428,7 +428,7 @@ fn devices_for(_root: &Path) -> Vec<u64> {
 fn skipped_paths(root: &Path) -> Vec<PathBuf> {
     if cfg!(target_os = "macos") && root == Path::new("/") {
         // `/System/Volumes/Data` is reached through firmlinks; walking it directly
-        // would count everything twice.
+        // would count everything twice
         ["/System/Volumes", "/Volumes", "/dev", "/Network"]
             .iter()
             .map(PathBuf::from)
@@ -445,7 +445,7 @@ fn skipped_paths(root: &Path) -> Vec<PathBuf> {
 
 /// Lays the walk out as a `Tree`. Each folder's children get consecutive ids, so
 /// its child list is one run of `kids`, and each folder's names and records are freed
-/// as soon as they are copied.
+/// as soon as they are copied
 fn flatten(root: Dir, name: &str, own: u64, root_path: PathBuf) -> Tree {
     fn measure(dir: &Dir, nodes: &mut usize, names: &mut usize) {
         *nodes += dir.children.len();
@@ -518,7 +518,7 @@ fn flatten(root: Dir, name: &str, own: u64, root_path: PathBuf) -> Tree {
 }
 
 /// Files an admin scan uses to talk to the app: the finished tree, live progress
-/// counters, and a marker the app creates to ask the helper to stop.
+/// counters, and a marker the app creates to ask the helper to stop
 #[derive(Clone)]
 pub struct HelperFiles {
     pub tree: PathBuf,
@@ -566,7 +566,7 @@ impl HelperFiles {
 }
 
 /// Scans `root` as root. macOS asks for an administrator's password or Touch ID, then
-/// runs this same executable in helper mode; `None` if that was refused or cancelled.
+/// runs this same executable in helper mode; `None` if that was refused or cancelled
 #[cfg(target_os = "macos")]
 pub fn scan_as_admin(root: &Path, display_name: &str, files: &HelperFiles) -> Option<Tree> {
     let exe = std::env::current_exe().ok()?;
@@ -598,7 +598,7 @@ pub fn scan_as_admin(root: &Path, display_name: &str, files: &HelperFiles) -> Op
 }
 
 /// Scans `root` elevated. Windows shows its UAC prompt, then runs this same executable
-/// in helper mode; `None` if that was refused or cancelled.
+/// in helper mode; `None` if that was refused or cancelled
 #[cfg(windows)]
 pub fn scan_as_admin(root: &Path, display_name: &str, files: &HelperFiles) -> Option<Tree> {
     use windows_sys::Win32::Foundation::CloseHandle;
@@ -627,7 +627,7 @@ pub fn scan_as_admin(root: &Path, display_name: &str, files: &HelperFiles) -> Op
 }
 
 /// Quotes one argument the way `CommandLineToArgvW` (and Rust's `args_os`) splits them:
-/// backslashes are literal except right before a quote, where they escape in pairs.
+/// backslashes are literal except right before a quote, where they escape in pairs
 #[cfg(windows)]
 fn quote_arg(arg: &std::ffi::OsStr) -> std::ffi::OsString {
     let arg = arg.to_string_lossy();
@@ -661,7 +661,7 @@ pub fn scan_as_admin(root: &Path, display_name: &str, _files: &HelperFiles) -> O
 
 /// What the elevated helper runs. On Windows a whole volume is read straight from its
 /// file table when that works, far faster than listing every folder; otherwise, and
-/// on other systems, it walks the folders.
+/// on other systems, it walks the folders
 fn scan_elevated(root: &Path, name: &str, progress: &Progress) -> Option<Tree> {
     #[cfg(windows)]
     match mft::scan(root, name, progress) {
@@ -675,7 +675,7 @@ fn scan_elevated(root: &Path, name: &str, progress: &Progress) -> Option<Tree> {
     scan(root, name, progress)
 }
 
-/// Entry point for `burrdisk --scan-helper <base> <root> <name>`, running as root.
+/// Entry point for `burrdisk --scan-helper <base> <root> <name>`, running as root
 pub fn run_helper(args: &[std::ffi::OsString]) -> std::process::ExitCode {
     use std::process::ExitCode;
     let [base, root, name] = args else { return ExitCode::FAILURE };
@@ -694,7 +694,7 @@ pub fn run_helper(args: &[std::ffi::OsString]) -> std::process::ExitCode {
                     progress.files.load(Ordering::Relaxed),
                     progress.bytes.load(Ordering::Relaxed)
                 );
-                // Write then rename, so the app never reads half a file.
+                // Write then rename, so the app never reads half a file
                 let partial = files.progress.with_extension("progress-new");
                 if fs::write(&partial, text).is_ok() {
                     let _ = fs::rename(&partial, &files.progress);
@@ -718,7 +718,7 @@ pub fn run_helper(args: &[std::ffi::OsString]) -> std::process::ExitCode {
 const TREE_MAGIC: &[u8; 4] = b"BDT2";
 
 impl Tree {
-    /// Serializes the tree for handing it from the admin helper to the app.
+    /// Serializes the tree for handing it from the admin helper to the app
     pub fn write(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         out.write_all(TREE_MAGIC)?;
         out.write_all(&(self.duration.as_millis() as u64).to_le_bytes())?;
@@ -740,7 +740,7 @@ impl Tree {
         Ok(())
     }
 
-    /// Reads a tree written by [`Tree::write`].
+    /// Reads a tree written by [`Tree::write`]
     pub fn read(mut input: impl std::io::Read, root_path: PathBuf) -> std::io::Result<Tree> {
         use std::io::{Error, ErrorKind};
         let mut u32_buf = [0u8; 4];
@@ -793,7 +793,7 @@ impl Tree {
             });
         }
         // Give each folder a run of `kids` sized to its children, then fill the runs
-        // in id order.
+        // in id order
         for id in 1..count {
             let parent = slots[id].parent;
             if parent != NO_PARENT {

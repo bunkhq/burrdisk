@@ -18,7 +18,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp target/release/burrdisk "$APP/Contents/MacOS/burrdisk"
 
-# App icon, built by script/icons/build.sh.
+# App icon, built by script/icons/build.sh
 cp assets/macos/Burrdisk.icns "$APP/Contents/Resources/Burrdisk.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -48,7 +48,7 @@ rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
 echo "$ZIP"
 
-# The disk image opens to the app beside an Applications shortcut, to drag across.
+# The disk image opens to the app beside an Applications shortcut, to drag across
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 cp -R "$APP" "$STAGE/"

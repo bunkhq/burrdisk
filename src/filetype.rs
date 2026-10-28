@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap};
 
 use crate::scan::{NodeId, NodeKind, Tree};
 
-/// What kind of thing an item is, judged by its extension.
+/// What kind of thing an item is, judged by its extension
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Category {
     Folder,
@@ -59,7 +59,7 @@ const DOCUMENT: &[&str] = &[
     "odt", "ods", "odp", "epub", "csv", "tex",
 ];
 
-/// The lowercased extension of a file name. Dotfiles like `.zshrc` have none.
+/// The lowercased extension of a file name. Dotfiles like `.zshrc` have none
 pub fn extension(name: &str) -> Option<String> {
     let (stem, ext) = name.rsplit_once('.')?;
     (!stem.is_empty() && !ext.is_empty() && ext.len() <= 16).then(|| ext.to_ascii_lowercase())
@@ -85,7 +85,7 @@ fn category_of_ext(ext: &str) -> Category {
 }
 
 /// Folders are folders unless their extension says they're an app, a library or
-/// some other package Finder shows as a single item.
+/// some other package Finder shows as a single item
 pub fn category(name: &str, kind: NodeKind) -> Category {
     let by_ext = extension(name).map_or(Category::Other, |ext| category_of_ext(&ext));
     match kind {
@@ -95,29 +95,29 @@ pub fn category(name: &str, kind: NodeKind) -> Category {
     }
 }
 
-/// Biggest files kept per extension; the rest are summed into "smaller".
+/// Biggest files kept per extension; the rest are summed into "smaller"
 const TOP_FILES: usize = 200;
 
-/// A bucket in the file type breakdown: the whole folder, a category, or one extension.
+/// A bucket in the file type breakdown: the whole folder, a category, or one extension
 pub struct Group {
     pub name: String,
     pub category: Category,
     pub size: u64,
     pub count: u64,
     pub parent: Option<u32>,
-    /// Sub-groups, largest first: categories under the root, extensions under a category.
+    /// Sub-groups, largest first: categories under the root, extensions under a category
     pub groups: Vec<u32>,
-    /// For an extension, its largest items, largest first.
+    /// For an extension, its largest items, largest first
     pub files: Vec<NodeId>,
     /// Where an extension sits within its category's slice, -0.5..0.5, which fans
-    /// its hue a little off the category's.
+    /// its hue a little off the category's
     pub spread: f32,
 }
 
-/// Everything under a folder, grouped by category and then extension.
+/// Everything under a folder, grouped by category and then extension
 pub struct Breakdown {
     pub groups: Vec<Group>,
-    /// Space the scan couldn't see, shown beside the categories.
+    /// Space the scan couldn't see, shown beside the categories
     pub hidden: Option<NodeId>,
 }
 
@@ -147,7 +147,7 @@ impl Breakdown {
                         hidden = Some(id);
                         continue;
                     }
-                    // Apps and other packages count as one item, not their insides.
+                    // Apps and other packages count as one item, not their insides
                     NodeKind::Dir => category(node.name, node.kind) != Category::Folder,
                 };
             if !item {
@@ -236,7 +236,7 @@ impl Breakdown {
         Self { groups, hidden }
     }
 
-    /// 0 for a category, 1 for an extension.
+    /// 0 for a category, 1 for an extension
     pub fn level(&self, g: u32) -> usize {
         match self.group(g).parent {
             Some(Self::ROOT) | None => 0,
@@ -245,7 +245,7 @@ impl Breakdown {
     }
 
     /// Finds a group by its category and, for an extension, its name; for carrying
-    /// an open group over to a rebuilt breakdown.
+    /// an open group over to a rebuilt breakdown
     pub fn find(&self, category: Category, name: Option<&str>) -> Option<u32> {
         let cat = self.group(Self::ROOT).groups.iter().copied().find(|g| self.group(*g).category == category)?;
         match name {
@@ -254,7 +254,7 @@ impl Breakdown {
         }
     }
 
-    /// The group a hovered item belongs to, for previewing in the sidebar.
+    /// The group a hovered item belongs to, for previewing in the sidebar
     pub fn group_of_file(&self, id: NodeId) -> Option<u32> {
         self.groups.iter().position(|g| g.files.contains(&id)).map(|ix| ix as u32)
     }
