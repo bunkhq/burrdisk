@@ -79,6 +79,13 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
                                         .text_xs()
                                         .text_color(theme::text_muted())
                                         .child(format!("{} files", format::count(files))),
+                                )
+                                .child(
+                                    div()
+                                        .mt_1()
+                                        .text_xs()
+                                        .text_color(theme::text_faint())
+                                        .child(format::clock(scanning.started.elapsed())),
                                 ),
                         ),
                 )
