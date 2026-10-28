@@ -30,7 +30,7 @@
 
 Burrdisk scans a disk or folder, shows you where the space went, and lets you clear it without fear of deleting the wrong thing.
 
-Every disk is drawn as a burr, the prickly seed the app is named after. Its spines grow into the biggest folders on the disk. Open one and you get an interactive sunburst you can dive through. Anything you want gone goes into the Collector first. You review the pile, and then Burrdisk moves it all to the Trash (the Recycle Bin on Windows) in one go. Nothing is ever deleted permanently.
+Every disk is drawn as a burr, the prickly seed the app is named after. Its spines grow into the biggest folders on the disk. Open one and you get an interactive sunburst you can dig through. Anything you want gone goes into the Collector first. You review the pile, and then Burrdisk moves it all to the Trash (the Recycle Bin on Windows) in one go. Nothing is ever deleted permanently.
 
 It is a native app written in Rust with [GPUI](https://gpui.rs), the GPU-accelerated UI framework behind the Zed editor. It opens instantly, and it stays smooth on disks with millions of files.
 

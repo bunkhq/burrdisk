@@ -204,6 +204,26 @@ html { scrollbar-color: #3a3a40 var(--ground); }
 }
 @keyframes fill { from { transform: scaleX(0.4); } }
 
+/* Pinned to the bottom of the screen until the visitor starts scrolling. */
+.scroll-cue {
+  position: fixed;
+  inset: auto 0 0;
+  z-index: 15;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 40px 0 14px;
+  background: linear-gradient(rgb(20 20 22 / 0), var(--ground) 42%);
+  font-size: 13px;
+  color: var(--faint-text);
+  text-decoration: none;
+  transition: opacity 400ms var(--cubic), color 260ms var(--cubic);
+}
+.scroll-cue:hover { color: var(--text); }
+.scroll-cue .ic { width: 18px; height: 18px; animation: nudge 1.8s var(--cubic) infinite; }
+.scroll-cue.gone { opacity: 0; pointer-events: none; }
+@keyframes nudge { 0%, 100% { transform: translateY(0); opacity: 0.6; } 50% { transform: translateY(5px); opacity: 1; } }
 .hero-copy { position: relative; margin-top: clamp(96px, 15vh, 180px); }
 h1, h2 {
   font-weight: 800;

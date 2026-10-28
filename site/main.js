@@ -225,7 +225,7 @@ for (const bar of document.querySelectorAll(".bar span")) {
   bar.style.setProperty("--tone", fullness(parseFloat(bar.style.getPropertyValue("--fill"))));
 }
 
-/* ---------- The dig: burr, sunburst, dive, collect, trash ---------- */
+/* ---------- The dig: burr, sunburst, dig in, collect, trash ---------- */
 const chart = document.querySelector("[data-chart]");
 if (chart) {
   chart.classList.add("data");
@@ -392,7 +392,7 @@ if (chart) {
       to({ x0: 0, x1: 1, d: 0, sweep: 1 }, view.sweep < 1 ? 900 : 620);
       trayState([]);
     },
-    dive() {
+    dig() {
       focus = you; collected.clear(); gone.clear();
       tray.style.opacity = 1; tray.classList.add("off");
       setCenter("160", "GB");
@@ -480,7 +480,11 @@ document.querySelectorAll(".shot").forEach((s) => s.classList.add("data"));
 
 /* ---------- Nav ---------- */
 const nav = document.getElementById("nav");
-addEventListener("scroll", () => nav.classList.toggle("solid", scrollY > 40), { passive: true });
+const cue = document.querySelector("[data-scroll-cue]");
+addEventListener("scroll", () => {
+  nav.classList.toggle("solid", scrollY > 40);
+  cue && cue.classList.toggle("gone", scrollY > 40);
+}, { passive: true });
 
 /* ---------- The cursor light inside buttons ---------- */
 for (const btn of document.querySelectorAll(".btn")) {
