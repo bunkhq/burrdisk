@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -125,9 +126,26 @@ pub struct Explorer {
     /// Item whose right-click menu is open, and where the click was.
     pub context: Option<(NodeId, Point<Pixels>)>,
     pub collected: Vec<NodeId>,
+    /// The Collector tile being dragged and its preview, whose spot on the shelf
+    /// shows as an empty slot for as long as the preview lives.
+    pub shelf_drag: Option<(NodeId, gpui::AnyWeakView)>,
+    /// How far the shelf is scrolled, where it's easing to, and when it last moved.
+    pub shelf_scroll: f32,
+    pub shelf_target: f32,
+    pub shelf_moved: Instant,
+    /// Until when the shelf keeps scrolling to its end, so a new tile is in view.
+    pub shelf_follow: Option<Instant>,
+    /// The shelf's visible width and its tiles' width; set while painting.
+    pub shelf_widths: Rc<Cell<(f32, f32)>>,
+    /// Where the tray sits, so a dragged tile knows whether it's still over it.
+    pub tray_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// When "Move to Trash" was pressed; the move starts once the countdown runs out.
     pub countdown: Option<Instant>,
     pub trashing: bool,
+    /// The move to the Trash under way, or just finished and about to close.
+    pub trash_job: Option<TrashJob>,
+    /// Keeps the item being moved in view in the manifest.
+    pub manifest_scroll: gpui::ScrollHandle,
     pub notice: Option<Notice>,
     pub mode: ChartMode,
     /// The focus folder grouped by file type, while the chart shows types.
@@ -137,6 +155,65 @@ pub struct Explorer {
     /// Type or extension the type chart is opened into, like a folder.
     pub group_focus: Option<u32>,
 }
+
+/// One item in a move to the Trash, as it was when the move began.
+pub struct TrashItem {
+    pub name: String,
+    /// The folder it's in.
+    pub place: String,
+    pub size: u64,
+    pub kind: NodeKind,
+    pub color: Option<gpui::Hsla>,
+}
+
+/// Where each item of a move to the Trash stands, shared with the thread moving them.
+pub const TRASH_WAITING: u8 = 0;
+pub const TRASH_MOVING: u8 = 1;
+pub const TRASH_MOVED: u8 = 2;
+pub const TRASH_FAILED: u8 = 3;
+
+pub struct TrashJob {
+    pub items: Vec<TrashItem>,
+    pub states: Arc<Vec<AtomicU8>>,
+    /// The progress bar's eased share of bytes processed.
+    pub shown: f32,
+    pub finished: Option<Instant>,
+}
+
+/// How long the finished list stays up before it closes and the result shows.
+pub const TRASH_LINGER: Duration = Duration::from_millis(900);
+
+impl TrashJob {
+    pub fn state(&self, ix: usize) -> u8 {
+        self.states[ix].load(Ordering::Relaxed)
+    }
+
+    pub fn total(&self) -> u64 {
+        self.items.iter().map(|i| i.size).sum()
+    }
+
+    /// Items and bytes dealt with so far, moved or not.
+    pub fn processed(&self) -> (usize, u64) {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(ix, _)| self.state(*ix) >= TRASH_MOVED)
+            .fold((0, 0), |(n, bytes), (_, item)| (n + 1, bytes + item.size))
+    }
+
+    pub fn current(&self) -> Option<&TrashItem> {
+        self.items.iter().enumerate().find(|(ix, _)| self.state(*ix) == TRASH_MOVING).map(|(_, item)| item)
+    }
+}
+
+/// A path as people write it, without the `\\?\` prefix a canonical Windows path carries.
+pub fn display_path(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    text.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(text)
+}
+
+/// The explorer sidebar's starting width.
+pub const SIDEBAR_WIDTH: f32 = 360.0;
 
 /// A short message shown above the tray, e.g. the result of moving items to the Trash.
 #[derive(Clone)]
@@ -165,6 +242,11 @@ pub struct DragItem {
     pub kind: NodeKind,
 }
 
+/// Payload carried when dragging a tile on the Collector's shelf: back out to put it
+/// back, or onto another tile to reorder.
+#[derive(Clone)]
+pub struct ShelfItem(pub DragItem);
+
 /// Drag payload for the chart. The chart is one element, so the item under the
 /// cursor is resolved when the button goes down rather than at render time.
 #[derive(Clone, Default)]
@@ -186,6 +268,8 @@ pub struct Burrdisk {
     pub menu: Option<PathBuf>,
     /// Whether macOS lets Burrdisk read protected folders; checked again on activation.
     pub full_disk_access: bool,
+    /// Width of the explorer's sidebar, as last dragged.
+    pub sidebar_width: f32,
     /// The user chose to scan without Full Disk Access this session.
     pub access_skipped: bool,
     /// When the access step was opened, for its entrance.
@@ -215,6 +299,7 @@ impl Burrdisk {
             screen: Screen::Home,
             menu: None,
             full_disk_access: volumes::has_full_disk_access(),
+            sidebar_width: SIDEBAR_WIDTH,
             access_skipped: false,
             access_since: Instant::now(),
             updater: Updater {
@@ -458,8 +543,17 @@ impl Burrdisk {
             trail: Tree::ROOT,
             context: None,
             collected: Vec::new(),
+            shelf_drag: None,
+            shelf_scroll: 0.,
+            shelf_target: 0.,
+            shelf_moved: Instant::now(),
+            shelf_follow: None,
+            shelf_widths: Rc::default(),
+            tray_bounds: Rc::default(),
             countdown: None,
             trashing: false,
+            trash_job: None,
+            manifest_scroll: gpui::ScrollHandle::new(),
             notice: None,
             mode: ChartMode::Size,
             breakdown: None,
@@ -794,7 +888,26 @@ impl Burrdisk {
             .iter()
             .map(|id| (*id, explorer.tree.path(*id)))
             .collect();
-        let job = cx.background_executor().spawn(async move { move_to_trash(items) });
+        let states: Arc<Vec<AtomicU8>> = Arc::new(items.iter().map(|_| AtomicU8::new(TRASH_WAITING)).collect());
+        explorer.trash_job = Some(TrashJob {
+            items: items
+                .iter()
+                .map(|(id, path)| {
+                    let node = explorer.tree.node(*id);
+                    TrashItem {
+                        name: node.name.to_string(),
+                        place: path.parent().map(display_path).unwrap_or_default(),
+                        size: node.size,
+                        kind: node.kind,
+                        color: explorer.segment_color(*id),
+                    }
+                })
+                .collect(),
+            states: states.clone(),
+            shown: 0.,
+            finished: None,
+        });
+        let job = cx.background_executor().spawn(async move { move_to_trash(items, &states) });
         cx.spawn(async move |this, cx| {
             let results = job.await;
             this.update(cx, |this, cx| {
@@ -816,11 +929,7 @@ impl Burrdisk {
                     }
                 }
                 // Never leave the view focused on something that no longer exists.
-                let lineage = explorer.tree.lineage(explorer.focus);
-                let detached = lineage
-                    .windows(2)
-                    .any(|w| !explorer.tree.node(w[0]).children.contains(&w[1]));
-                if detached {
+                if !explorer.tree.is_attached(explorer.focus) {
                     explorer.focus = Tree::ROOT;
                     explorer.zoom = None;
                 }
@@ -828,6 +937,9 @@ impl Burrdisk {
                     explorer.trail = explorer.focus;
                 }
                 explorer.trashing = false;
+                if let Some(job) = &mut explorer.trash_job {
+                    job.finished = Some(Instant::now());
+                }
                 let text = match (failed.len(), reason) {
                     (0, _) => format!("Moved {} to the {}", crate::format::bytes(freed), crate::platform::TRASH),
                     (n, Some(reason)) => {
@@ -838,8 +950,14 @@ impl Burrdisk {
                 };
                 explorer.zoom = None;
                 explorer.relayout();
-                this.show_notice(text, !failed.is_empty(), cx);
                 cx.notify();
+                // The result shows once the list of what moved has closed.
+                let error = !failed.is_empty();
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(TRASH_LINGER).await;
+                    this.update(cx, |this, cx| this.show_notice(text, error, cx)).ok();
+                })
+                .detach();
             })
             .ok();
         })
@@ -1064,7 +1182,11 @@ impl Explorer {
         if self.zoom.as_ref().is_some_and(|z| z.finished()) {
             self.zoom = None;
         }
+        let shelf_moving = self.tick_shelf();
+        let trash_moving = self.tick_trash();
         self.zoom.is_some()
+            || shelf_moving
+            || trash_moving
             || self.countdown.is_some()
             || self.revealed.elapsed() < sunburst::REVEAL_DURATION
             || self.hover_since.elapsed() < HOVER_FADE
@@ -1104,6 +1226,11 @@ impl Explorer {
         let tree = &self.tree;
         self.collected.retain(|c| !tree.is_ancestor(id, *c));
         self.collected.push(id);
+        // Bring the new tile into view.
+        if self.shelf_scroll == self.shelf_target {
+            self.shelf_moved = Instant::now();
+        }
+        self.shelf_follow = Some(Instant::now() + Duration::from_millis(400));
         // Changing the pile mid-countdown stops it, so nothing moves that wasn't reviewed.
         self.countdown = None;
     }
@@ -1111,6 +1238,64 @@ impl Explorer {
     pub fn uncollect(&mut self, id: NodeId) {
         self.collected.retain(|c| *c != id);
         self.countdown = None;
+    }
+
+    /// Tile being dragged off the shelf, while its drag lasts.
+    pub fn shelf_dragging(&self) -> Option<NodeId> {
+        self.shelf_drag.as_ref().filter(|(_, view)| view.upgrade().is_some()).map(|(id, _)| *id)
+    }
+
+    /// How far the shelf can scroll.
+    pub fn shelf_room(&self) -> f32 {
+        let (visible, content) = self.shelf_widths.get();
+        (content - visible).max(0.)
+    }
+
+    pub fn scroll_shelf(&mut self, by: f32) {
+        if self.shelf_scroll == self.shelf_target {
+            // Starting from rest; don't count the idle time as a frame.
+            self.shelf_moved = Instant::now();
+        }
+        self.shelf_follow = None;
+        self.shelf_target = (self.shelf_target + by).clamp(0., self.shelf_room());
+    }
+
+    /// Eases the move's progress bar, and closes the list once it has lingered.
+    fn tick_trash(&mut self) -> bool {
+        let Some(job) = &mut self.trash_job else { return false };
+        if job.finished.is_some_and(|at| at.elapsed() >= TRASH_LINGER) {
+            self.trash_job = None;
+            return false;
+        }
+        let total = job.total().max(1);
+        let target = if job.finished.is_some() { 1. } else { job.processed().1 as f32 / total as f32 };
+        job.shown += (target - job.shown) * 0.18;
+        true
+    }
+
+    /// Eases the shelf toward where it's headed. Whether it's still moving.
+    fn tick_shelf(&mut self) -> bool {
+        if self.shelf_follow.is_some_and(|until| Instant::now() < until) {
+            self.shelf_target = self.shelf_room();
+        } else {
+            self.shelf_follow = None;
+        }
+        self.shelf_target = self.shelf_target.clamp(0., self.shelf_room());
+        let dt = self.shelf_moved.elapsed().as_secs_f32().min(0.05);
+        self.shelf_moved = Instant::now();
+        let gap = self.shelf_target - self.shelf_scroll;
+        self.shelf_scroll = if gap.abs() < 0.5 { self.shelf_target } else { self.shelf_target - gap * (-dt / 0.08).exp() };
+        self.shelf_scroll != self.shelf_target || self.shelf_follow.is_some()
+    }
+
+    /// Moves a collected item to where `before` sits on the shelf, or to the end.
+    pub fn move_collected(&mut self, id: NodeId, before: Option<NodeId>) {
+        if before == Some(id) || !self.collected.contains(&id) {
+            return;
+        }
+        self.collected.retain(|c| *c != id);
+        let at = before.and_then(|b| self.collected.iter().position(|c| *c == b)).unwrap_or(self.collected.len());
+        self.collected.insert(at, id);
     }
 
     pub fn is_collected(&self, id: NodeId) -> bool {
@@ -1184,7 +1369,9 @@ pub fn open_in_terminal(path: &std::path::Path) {
 /// Moves files and folders to the Trash. The Foundation API is tried first; whatever
 /// it refuses (it does when ~/.Trash has the wrong owner, among other cases) is
 /// handed to Finder in one batch, which is what a drag to the Trash would do.
-fn move_to_trash(items: Vec<(NodeId, PathBuf)>) -> Vec<(NodeId, Result<(), String>)> {
+/// Moves each item to the Trash, marking its spot in `states` as it goes.
+fn move_to_trash(items: Vec<(NodeId, PathBuf)>, states: &Arc<Vec<AtomicU8>>) -> Vec<(NodeId, Result<(), String>)> {
+    let mark = |ix: usize, state: u8| states[ix].store(state, Ordering::Relaxed);
     #[cfg(target_os = "macos")]
     {
         use trash::macos::{DeleteMethod, TrashContextExtMacos};
@@ -1192,28 +1379,36 @@ fn move_to_trash(items: Vec<(NodeId, PathBuf)>) -> Vec<(NodeId, Result<(), Strin
         context.set_delete_method(DeleteMethod::NsFileManager);
         let (mut done, refused): (Vec<_>, Vec<_>) = items
             .into_iter()
-            .map(|(id, path)| {
+            .enumerate()
+            .map(|(ix, (id, path))| {
+                mark(ix, TRASH_MOVING);
                 let ok = context.delete(&path).is_ok();
-                (id, path, ok)
+                // Refused items wait for Finder to have a go.
+                mark(ix, if ok { TRASH_MOVED } else { TRASH_WAITING });
+                (ix, id, path, ok)
             })
-            .partition(|(_, _, ok)| *ok);
-        let mut results: Vec<(NodeId, Result<(), String>)> = done.drain(..).map(|(id, _, _)| (id, Ok(()))).collect();
+            .partition(|(_, _, _, ok)| *ok);
+        let mut results: Vec<(NodeId, Result<(), String>)> = done.drain(..).map(|(_, id, _, _)| (id, Ok(()))).collect();
         if !refused.is_empty() {
             context.set_delete_method(DeleteMethod::Finder);
-            let paths: Vec<&PathBuf> = refused.iter().map(|(_, path, _)| path).collect();
+            for (ix, ..) in &refused {
+                mark(*ix, TRASH_MOVING);
+            }
+            let paths: Vec<&PathBuf> = refused.iter().map(|(_, _, path, _)| path).collect();
             let outcome = context.delete_all(paths).map_err(|error| match error {
                 trash::Error::Unknown { description } => description
                     .rsplit_once("failed: ")
                     .map_or(description.clone(), |(_, tail)| tail.to_string()),
                 other => other.to_string(),
             });
-            for (id, path, _) in refused {
+            for (ix, id, path, _) in refused {
                 // Finder works on the batch as a whole; check what actually left.
                 let result = match &outcome {
                     Ok(()) => Ok(()),
                     Err(_) if !path.exists() => Ok(()),
                     Err(error) => Err(error.clone()),
                 };
+                mark(ix, if result.is_ok() { TRASH_MOVED } else { TRASH_FAILED });
                 results.push((id, result));
             }
         }
@@ -1221,11 +1416,19 @@ fn move_to_trash(items: Vec<(NodeId, PathBuf)>) -> Vec<(NodeId, Result<(), Strin
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = mark;
         let ids: Vec<NodeId> = items.iter().map(|(id, _)| *id).collect();
+        let states = states.clone();
         let run = move || -> Vec<(NodeId, Result<(), String>)> {
             items
                 .into_iter()
-                .map(|(id, path)| (id, trash::delete(&path).map_err(|error| error.to_string())))
+                .enumerate()
+                .map(|(ix, (id, path))| {
+                    states[ix].store(TRASH_MOVING, Ordering::Relaxed);
+                    let result = trash::delete(&path).map_err(|error| error.to_string());
+                    states[ix].store(if result.is_ok() { TRASH_MOVED } else { TRASH_FAILED }, Ordering::Relaxed);
+                    (id, result)
+                })
                 .collect()
         };
         // On Windows, `trash` sets up single-threaded COM and panics on a thread that

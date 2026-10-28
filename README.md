@@ -55,6 +55,6 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds the disk i
 - Sizes are allocated bytes on disk, so sparse and compressed files count correctly. Hard links are counted once.
 - On the startup disk, space the scan can't see (snapshots, protected system files) shows as **Hidden space**. Give Burrdisk Full Disk Access in System Settings to see more.
 - Deleting moves items to the Trash (the Recycle Bin on Windows). Nothing is removed permanently.
-- On Windows, files OneDrive keeps online only count as the space they use locally. Hard links (common under `C:\Windows\WinSxS`) are counted at every path, so that folder can read larger than it is. Rescan as Administrator goes through a UAC prompt.
+- On Windows, files OneDrive keeps online only count as the space they use locally. Hard links (common under `C:\Windows\WinSxS`) are counted at every path, so that folder can read larger than it is. Rescan as Administrator goes through a UAC prompt, and for a whole NTFS drive it then reads the disk's file table directly instead of opening every folder, which is several times faster and also counts space that normal scans can't see, such as System Volume Information. It counts files Windows has compressed (Compact OS) at the space they take, where a normal scan counts their full length.
 
 Created in [T3 Code](https://t3.codes).

@@ -1,10 +1,14 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
+
+#[cfg(windows)]
+mod mft;
 
 pub type NodeId = u32;
 
@@ -17,28 +21,59 @@ pub enum NodeKind {
     Hidden,
 }
 
-#[derive(Debug)]
-pub struct Node {
-    pub name: Box<str>,
+/// One item of a [`Tree`], borrowed from it.
+#[derive(Clone, Copy, Debug)]
+pub struct Node<'a> {
+    pub name: &'a str,
     pub size: u64,
     /// Files inside (1 for a file); folders themselves aren't counted.
     pub items: u64,
     pub kind: NodeKind,
     pub parent: Option<NodeId>,
     /// Sorted largest first.
-    pub children: Vec<NodeId>,
+    pub children: &'a [NodeId],
+}
+
+const NO_PARENT: u32 = u32::MAX;
+
+/// How a node is stored: 40 bytes, with its name in `Tree::names` and its children's
+/// ids in `Tree::kids`, so a scan of millions of files makes no allocation per file.
+struct Slot {
+    size: u64,
+    items: u64,
+    name: u32,
+    name_len: u32,
+    parent: u32,
+    /// The node's children are `kids[first..first + count]`.
+    first: u32,
+    count: u32,
+    kind: NodeKind,
 }
 
 pub struct Tree {
-    nodes: Vec<Node>,
+    slots: Vec<Slot>,
+    names: String,
+    kids: Vec<NodeId>,
     root_path: PathBuf,
+    /// How long the scan took.
+    pub duration: Duration,
 }
 
 impl Tree {
     pub const ROOT: NodeId = 0;
 
-    pub fn node(&self, id: NodeId) -> &Node {
-        &self.nodes[id as usize]
+    pub fn node(&self, id: NodeId) -> Node<'_> {
+        let slot = &self.slots[id as usize];
+        let name = slot.name as usize;
+        let first = slot.first as usize;
+        Node {
+            name: &self.names[name..name + slot.name_len as usize],
+            size: slot.size,
+            items: slot.items,
+            kind: slot.kind,
+            parent: (slot.parent != NO_PARENT).then_some(slot.parent),
+            children: &self.kids[first..first + slot.count as usize],
+        }
     }
 
     pub fn path(&self, id: NodeId) -> PathBuf {
@@ -49,7 +84,7 @@ impl Tree {
                 break;
             }
             let node = self.node(current);
-            parts.push(&*node.name);
+            parts.push(node.name);
             cursor = node.parent;
         }
         let mut path = self.root_path.clone();
@@ -83,9 +118,11 @@ impl Tree {
         }
     }
 
-    /// Whether a node is still reachable from the root (it isn't once removed).
+    /// Whether a node is still reachable from the root. It isn't once it, or any
+    /// folder it was in, is removed.
     pub fn is_attached(&self, id: NodeId) -> bool {
-        self.lineage(id).windows(2).all(|w| self.node(w[0]).children.contains(&w[1]))
+        let lineage = self.lineage(id);
+        lineage[0] == Self::ROOT && lineage.windows(2).all(|w| self.node(w[0]).children.contains(&w[1]))
     }
 
     /// Detaches a node after its files were deleted, shrinking every ancestor.
@@ -94,38 +131,63 @@ impl Tree {
             return;
         };
         let (size, items) = (self.node(id).size, self.node(id).items);
-        self.nodes[parent as usize].children.retain(|c| *c != id);
+        let (first, count) = {
+            let slot = &self.slots[parent as usize];
+            (slot.first as usize, slot.count as usize)
+        };
+        if let Some(pos) = self.kids[first..first + count].iter().position(|c| *c == id) {
+            self.kids.copy_within(first + pos + 1..first + count, first + pos);
+            self.slots[parent as usize].count -= 1;
+        }
         let mut cursor = Some(parent);
         while let Some(current) = cursor {
-            let node = &mut self.nodes[current as usize];
-            node.size = node.size.saturating_sub(size);
-            node.items = node.items.saturating_sub(items);
-            cursor = node.parent;
+            let slot = &mut self.slots[current as usize];
+            slot.size = slot.size.saturating_sub(size);
+            slot.items = slot.items.saturating_sub(items);
+            cursor = self.node(current).parent;
         }
-        let parent_node = &self.nodes[parent as usize];
-        let mut children = parent_node.children.clone();
-        children.sort_by(|a, b| self.node(*b).size.cmp(&self.node(*a).size));
-        self.nodes[parent as usize].children = children;
-        self.nodes[id as usize].parent = None;
+        // Every folder up the chain shrank, so each may now rank lower among its siblings.
+        let mut cursor = self.node(parent).parent;
+        while let Some(current) = cursor {
+            self.sort_children(current);
+            cursor = self.node(current).parent;
+        }
+        self.slots[id as usize].parent = NO_PARENT;
+    }
+
+    fn sort_children(&mut self, id: NodeId) {
+        let slot = &self.slots[id as usize];
+        let (first, count) = (slot.first as usize, slot.count as usize);
+        let slots = &self.slots;
+        self.kids[first..first + count].sort_by(|a, b| slots[*b as usize].size.cmp(&slots[*a as usize].size));
     }
 
     /// Adds a pseudo-entry for space the scan could not see.
     pub fn add_hidden_space(&mut self, size: u64) {
-        let id = self.nodes.len() as NodeId;
-        self.nodes.push(Node {
-            name: "Hidden space".into(),
+        const NAME: &str = "Hidden space";
+        let id = self.slots.len() as NodeId;
+        self.slots.push(Slot {
             size,
             items: 0,
+            name: self.names.len() as u32,
+            name_len: NAME.len() as u32,
+            parent: Self::ROOT,
+            first: 0,
+            count: 0,
             kind: NodeKind::Hidden,
-            parent: Some(Self::ROOT),
-            children: Vec::new(),
         });
-        let root = &mut self.nodes[Self::ROOT as usize];
+        self.names.push_str(NAME);
+        // The root's children move to the end of `kids`, where there is room for one more.
+        let root = &self.slots[Self::ROOT as usize];
+        let (first, count) = (root.first as usize, root.count as usize);
+        let moved = self.kids.len();
+        self.kids.extend_from_within(first..first + count);
+        self.kids.push(id);
+        let root = &mut self.slots[Self::ROOT as usize];
         root.size += size;
-        root.children.push(id);
-        let mut children = self.nodes[Self::ROOT as usize].children.clone();
-        children.sort_by(|a, b| self.node(*b).size.cmp(&self.node(*a).size));
-        self.nodes[Self::ROOT as usize].children = children;
+        root.first = moved as u32;
+        root.count += 1;
+        self.sort_children(Self::ROOT);
     }
 }
 
@@ -147,13 +209,31 @@ impl Progress {
     }
 }
 
-/// A subtree built during the parallel walk, flattened into a `Tree` afterwards.
-struct Entry {
-    name: Box<str>,
+/// A folder's listing, built during the parallel walk and flattened into a `Tree`
+/// afterwards. Its children's names share one string, so a file costs a 24-byte
+/// record instead of a record plus an allocation of its own.
+#[derive(Default)]
+struct Dir {
+    names: String,
+    children: Vec<Child>,
+    /// Totals of the children's sizes and file counts.
     size: u64,
     items: u64,
-    is_dir: bool,
-    children: Vec<Entry>,
+}
+
+struct Child {
+    /// Where this child's name ends in its folder's `names`. It starts where the
+    /// previous child's ends.
+    name_end: u32,
+    /// For a folder, its own size plus everything inside.
+    size: u64,
+    dir: Option<Box<Dir>>,
+}
+
+impl Child {
+    fn items(&self) -> u64 {
+        self.dir.as_ref().map_or(1, |d| d.items)
+    }
 }
 
 struct Walker<'a> {
@@ -168,91 +248,82 @@ struct Walker<'a> {
 
 /// Scans `root` and returns its size tree, or `None` if cancelled.
 pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Option<Tree> {
+    let started = Instant::now();
     let walker = Walker {
         devices: devices_for(root),
         skip: skipped_paths(root),
         hard_links: Mutex::default(),
         progress,
     };
-    let children = walker.walk(root);
+    let dir = walker.walk(root);
     if progress.is_cancelled() {
         return None;
     }
     let own = fs::symlink_metadata(root).map(|m| allocated(&m)).unwrap_or(0);
-    let entry = Entry {
-        name: display_name.into(),
-        size: own + children.iter().map(|c| c.size).sum::<u64>(),
-        items: children.iter().map(|c| c.items).sum(),
-        is_dir: true,
-        children,
-    };
-    let mut nodes = Vec::new();
-    flatten(entry, None, &mut nodes);
-    Some(Tree {
-        nodes,
-        root_path: root.to_path_buf(),
-    })
+    let mut tree = flatten(dir, display_name, own, root.to_path_buf());
+    tree.duration = started.elapsed();
+    Some(tree)
 }
 
 impl Walker<'_> {
-    fn walk(&self, dir: &Path) -> Vec<Entry> {
+    fn walk(&self, dir: &Path) -> Dir {
+        let mut out = Dir::default();
         let Ok(read_dir) = fs::read_dir(dir) else {
-            return Vec::new();
+            return out;
         };
         if let Ok(mut current) = self.progress.current.try_lock() {
-            *current = dir.display().to_string();
+            use std::fmt::Write;
+            current.clear();
+            let _ = write!(current, "{}", dir.display());
         }
 
-        let mut entries = Vec::new();
+        // Subfolders to walk next: where each sits in `children`, its path, its own size.
         let mut subdirs = Vec::new();
-        let mut bytes = 0;
+        let (mut files, mut bytes) = (0, 0);
         for item in read_dir.flatten() {
             if self.progress.is_cancelled() {
-                return Vec::new();
+                return Dir::default();
             }
             // On Unix this is an lstat, so symlinks are never followed.
             let Ok(meta) = item.metadata() else { continue };
-            let name: Box<str> = item.file_name().to_string_lossy().into();
-            let file_type = meta.file_type();
-            if file_type.is_dir() {
+            let size = if meta.file_type().is_dir() {
                 let path = item.path();
                 if !self.same_device(&meta) || self.skip.iter().any(|s| s == &path) {
                     continue;
                 }
-                subdirs.push((path, name, allocated(&meta)));
+                subdirs.push((out.children.len(), path, allocated(&meta)));
+                0
             } else {
-                let size = if self.first_link(&meta) { file_allocated(&meta, &item) } else { 0 };
-                bytes += size;
-                entries.push(Entry {
-                    name,
-                    size,
-                    items: 1,
-                    is_dir: false,
-                    children: Vec::new(),
-                });
-            }
+                files += 1;
+                if self.first_link(&meta) { file_allocated(&meta, &item) } else { 0 }
+            };
+            bytes += size;
+            out.names.push_str(&item.file_name().to_string_lossy());
+            out.children.push(Child { name_end: out.names.len() as u32, size, dir: None });
         }
-        self.progress
-            .files
-            .fetch_add(entries.len() as u64, Ordering::Relaxed);
+        self.progress.files.fetch_add(files, Ordering::Relaxed);
         self.progress.bytes.fetch_add(bytes, Ordering::Relaxed);
 
-        let dirs: Vec<Entry> = subdirs
+        let walked: Vec<(usize, u64, Dir)> = subdirs
             .into_par_iter()
-            .map(|(path, name, own)| {
-                let children = self.walk(&path);
+            .map(|(ix, path, own)| {
+                let dir = self.walk(&path);
                 self.progress.bytes.fetch_add(own, Ordering::Relaxed);
-                Entry {
-                    name,
-                    size: own + children.iter().map(|c| c.size).sum::<u64>(),
-                    items: children.iter().map(|c| c.items).sum::<u64>(),
-                    is_dir: true,
-                    children,
-                }
+                (ix, own, dir)
             })
             .collect();
-        entries.extend(dirs);
-        entries
+        for (ix, own, dir) in walked {
+            let child = &mut out.children[ix];
+            child.size = own + dir.size;
+            child.dir = Some(Box::new(dir));
+        }
+        out.size = out.children.iter().map(|c| c.size).sum();
+        out.items = out.children.iter().map(Child::items).sum();
+        // Growing buffers leave up to half their room empty; hand it back before the
+        // whole walk is held in memory at once.
+        out.names.shrink_to_fit();
+        out.children.shrink_to_fit();
+        out
     }
 
     #[cfg(unix)]
@@ -372,24 +443,78 @@ fn skipped_paths(root: &Path) -> Vec<PathBuf> {
     }
 }
 
-fn flatten(entry: Entry, parent: Option<NodeId>, nodes: &mut Vec<Node>) -> NodeId {
-    let id = nodes.len() as NodeId;
-    nodes.push(Node {
-        name: entry.name,
-        size: entry.size,
-        items: entry.items,
-        kind: if entry.is_dir { NodeKind::Dir } else { NodeKind::File },
-        parent,
-        children: Vec::new(),
+/// Lays the walk out as a `Tree`. Each folder's children get consecutive ids, so
+/// its child list is one run of `kids`, and each folder's names and records are freed
+/// as soon as they are copied.
+fn flatten(root: Dir, name: &str, own: u64, root_path: PathBuf) -> Tree {
+    fn measure(dir: &Dir, nodes: &mut usize, names: &mut usize) {
+        *nodes += dir.children.len();
+        *names += dir.names.len();
+        for child in &dir.children {
+            if let Some(sub) = &child.dir {
+                measure(sub, nodes, names);
+            }
+        }
+    }
+
+    fn place(dir: Dir, id: NodeId, tree: &mut Tree) {
+        let Dir { names, children, .. } = dir;
+        let mut start = 0;
+        let mut children: Vec<(u32, Child)> = children
+            .into_iter()
+            .map(|child| (std::mem::replace(&mut start, child.name_end), child))
+            .collect();
+        children.sort_unstable_by_key(|(_, child)| std::cmp::Reverse(child.size));
+
+        let first_id = tree.slots.len() as NodeId;
+        let slot = &mut tree.slots[id as usize];
+        slot.first = tree.kids.len() as u32;
+        slot.count = children.len() as u32;
+        for (i, (start, child)) in children.iter().enumerate() {
+            let text = &names[*start as usize..child.name_end as usize];
+            tree.slots.push(Slot {
+                size: child.size,
+                items: child.items(),
+                name: tree.names.len() as u32,
+                name_len: text.len() as u32,
+                parent: id,
+                first: 0,
+                count: 0,
+                kind: if child.dir.is_some() { NodeKind::Dir } else { NodeKind::File },
+            });
+            tree.names.push_str(text);
+            tree.kids.push(first_id + i as NodeId);
+        }
+        drop(names);
+        for (i, (_, child)) in children.into_iter().enumerate() {
+            if let Some(sub) = child.dir {
+                place(*sub, first_id + i as NodeId, tree);
+            }
+        }
+    }
+
+    let (mut nodes, mut names) = (1, name.len());
+    measure(&root, &mut nodes, &mut names);
+    let mut tree = Tree {
+        slots: Vec::with_capacity(nodes),
+        names: String::with_capacity(names),
+        kids: Vec::with_capacity(nodes),
+        root_path,
+        duration: Duration::ZERO,
+    };
+    tree.slots.push(Slot {
+        size: own + root.size,
+        items: root.items,
+        name: 0,
+        name_len: name.len() as u32,
+        parent: NO_PARENT,
+        first: 0,
+        count: 0,
+        kind: NodeKind::Dir,
     });
-    let mut children = entry.children;
-    children.sort_unstable_by(|a, b| b.size.cmp(&a.size));
-    let ids: Vec<NodeId> = children
-        .into_iter()
-        .map(|child| flatten(child, Some(id), nodes))
-        .collect();
-    nodes[id as usize].children = ids;
-    id
+    tree.names.push_str(name);
+    place(root, Tree::ROOT, &mut tree);
+    tree
 }
 
 /// Files an admin scan uses to talk to the app: the finished tree, live progress
@@ -534,6 +659,22 @@ pub fn scan_as_admin(root: &Path, display_name: &str, _files: &HelperFiles) -> O
     scan(root, display_name, &Progress::default())
 }
 
+/// What the elevated helper runs. On Windows a whole volume is read straight from its
+/// file table when that works, far faster than listing every folder; otherwise, and
+/// on other systems, it walks the folders.
+fn scan_elevated(root: &Path, name: &str, progress: &Progress) -> Option<Tree> {
+    #[cfg(windows)]
+    match mft::scan(root, name, progress) {
+        Ok(tree) => return Some(tree),
+        Err(mft::Failure::Cancelled) => return None,
+        Err(mft::Failure::Unsupported) => {
+            progress.files.store(0, Ordering::Relaxed);
+            progress.bytes.store(0, Ordering::Relaxed);
+        }
+    }
+    scan(root, name, progress)
+}
+
 /// Entry point for `burrdisk --scan-helper <base> <root> <name>`, running as root.
 pub fn run_helper(args: &[std::ffi::OsString]) -> std::process::ExitCode {
     use std::process::ExitCode;
@@ -561,7 +702,7 @@ pub fn run_helper(args: &[std::ffi::OsString]) -> std::process::ExitCode {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
         });
-        let tree = scan(Path::new(root), &name.to_string_lossy(), &progress);
+        let tree = scan_elevated(Path::new(root), &name.to_string_lossy(), &progress);
         done.store(true, Ordering::Relaxed);
         tree
     });
@@ -574,14 +715,16 @@ pub fn run_helper(args: &[std::ffi::OsString]) -> std::process::ExitCode {
     if written.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
-const TREE_MAGIC: &[u8; 4] = b"BDT1";
+const TREE_MAGIC: &[u8; 4] = b"BDT2";
 
 impl Tree {
     /// Serializes the tree for handing it from the admin helper to the app.
     pub fn write(&self, out: &mut impl std::io::Write) -> std::io::Result<()> {
         out.write_all(TREE_MAGIC)?;
-        out.write_all(&(self.nodes.len() as u32).to_le_bytes())?;
-        for node in &self.nodes {
+        out.write_all(&(self.duration.as_millis() as u64).to_le_bytes())?;
+        out.write_all(&(self.slots.len() as u32).to_le_bytes())?;
+        for id in 0..self.slots.len() as NodeId {
+            let node = self.node(id);
             let kind = match node.kind {
                 NodeKind::Dir => 0u8,
                 NodeKind::File => 1,
@@ -590,15 +733,14 @@ impl Tree {
             out.write_all(&[kind])?;
             out.write_all(&node.size.to_le_bytes())?;
             out.write_all(&node.items.to_le_bytes())?;
-            out.write_all(&node.parent.unwrap_or(u32::MAX).to_le_bytes())?;
+            out.write_all(&node.parent.unwrap_or(NO_PARENT).to_le_bytes())?;
             out.write_all(&(node.name.len() as u32).to_le_bytes())?;
             out.write_all(node.name.as_bytes())?;
         }
         Ok(())
     }
 
-    /// Reads a tree written by [`Tree::write`]. Children are listed in id order,
-    /// which is the largest-first order they were written in.
+    /// Reads a tree written by [`Tree::write`].
     pub fn read(mut input: impl std::io::Read, root_path: PathBuf) -> std::io::Result<Tree> {
         use std::io::{Error, ErrorKind};
         let mut u32_buf = [0u8; 4];
@@ -608,9 +750,16 @@ impl Tree {
         if &magic != TREE_MAGIC {
             return Err(Error::new(ErrorKind::InvalidData, "not a Burrdisk tree"));
         }
+        input.read_exact(&mut u64_buf)?;
+        let duration = Duration::from_millis(u64::from_le_bytes(u64_buf));
         input.read_exact(&mut u32_buf)?;
         let count = u32::from_le_bytes(u32_buf) as usize;
-        let mut nodes: Vec<Node> = Vec::with_capacity(count);
+        if count == 0 {
+            return Err(Error::new(ErrorKind::InvalidData, "empty tree"));
+        }
+        let mut slots: Vec<Slot> = Vec::with_capacity(count);
+        let mut names = String::new();
+        let mut name = Vec::new();
         for id in 0..count {
             let mut kind = [0u8; 1];
             input.read_exact(&mut kind)?;
@@ -619,33 +768,58 @@ impl Tree {
             input.read_exact(&mut u64_buf)?;
             let items = u64::from_le_bytes(u64_buf);
             input.read_exact(&mut u32_buf)?;
-            let parent = Some(u32::from_le_bytes(u32_buf)).filter(|p| *p != u32::MAX);
-            input.read_exact(&mut u32_buf)?;
-            let mut name = vec![0u8; u32::from_le_bytes(u32_buf) as usize];
-            input.read_exact(&mut name)?;
-            if parent.is_some_and(|p| p as usize >= id) {
+            let parent = u32::from_le_bytes(u32_buf);
+            if parent != NO_PARENT && parent as usize >= id {
                 return Err(Error::new(ErrorKind::InvalidData, "parent after child"));
             }
-            if let Some(p) = parent {
-                nodes[p as usize].children.push(id as NodeId);
-            }
-            nodes.push(Node {
-                name: String::from_utf8_lossy(&name).into(),
+            input.read_exact(&mut u32_buf)?;
+            name.resize(u32::from_le_bytes(u32_buf) as usize, 0);
+            input.read_exact(&mut name)?;
+            let start = names.len();
+            names.push_str(&String::from_utf8_lossy(&name));
+            slots.push(Slot {
                 size,
                 items,
+                name: start as u32,
+                name_len: (names.len() - start) as u32,
+                parent,
+                first: 0,
+                count: 0,
                 kind: match kind[0] {
                     0 => NodeKind::Dir,
                     1 => NodeKind::File,
                     _ => NodeKind::Hidden,
                 },
-                parent,
-                children: Vec::new(),
             });
         }
-        if nodes.is_empty() {
-            return Err(Error::new(ErrorKind::InvalidData, "empty tree"));
+        // Give each folder a run of `kids` sized to its children, then fill the runs
+        // in id order.
+        for id in 1..count {
+            let parent = slots[id].parent;
+            if parent != NO_PARENT {
+                slots[parent as usize].count += 1;
+            }
         }
-        Ok(Tree { nodes, root_path })
+        let mut next = 0;
+        for slot in &mut slots {
+            slot.first = next;
+            next += slot.count;
+            slot.count = 0;
+        }
+        let mut kids = vec![0; next as usize];
+        for id in 1..count {
+            let parent = slots[id].parent;
+            if parent != NO_PARENT {
+                let slot = &mut slots[parent as usize];
+                kids[(slot.first + slot.count) as usize] = id as NodeId;
+                slot.count += 1;
+            }
+        }
+        let mut tree = Tree { slots, names, kids, root_path, duration };
+        for id in 0..count as NodeId {
+            tree.sort_children(id);
+        }
+        Ok(tree)
     }
 }
 
