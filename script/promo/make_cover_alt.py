@@ -165,12 +165,13 @@ def edge(w, h):
     return f'<rect x="0.5" y="0.5" width="{w - 1}" height="{h - 1}" rx="13.5" fill="none" stroke="#ffffff" stroke-opacity="0.12"/>'
 
 
-def home_window():
+def home_window(h=740, oy=40):
     """Home: the startup disk as a scanned burr beside its capacity sentence,
     then the other drives as small burrs lit to their fill. The window matches
-    the Explorer's size; like the app, the column sits centered in it."""
-    w, h = 1140, 740
-    ox, oy = (w - 820) / 2, 40
+    the Explorer's size; like the app, the column sits centered in it. A
+    shorter `h` with a smaller `oy` trims the empty space below the drives."""
+    w = 1140
+    ox = (w - 820) / 2
     title = (
         f'{wordmark_burr(126, 28, 10)}'
         + text(144, 33, "Burrdisk", 14, TEXT, 700)
@@ -251,9 +252,11 @@ def sunburst(cx, cy, inner, ring):
     return "\n".join(out)
 
 
-def explorer_window():
+def explorer_window(tray=None, chart=(92, 74)):
     """The Explorer: sunburst, the sidebar's rows with share bars, and the
-    Collector holding three items above a red Move to Trash."""
+    Collector holding three items above a red Move to Trash. `tray(w, ty)`
+    draws a different Collector instead; `chart` is the sunburst's hole radius
+    and ring width (the cover's runs past the window's edges)."""
     w, h = 1140, 740
     colors = lobe_colors(SHARES)
     title = (
@@ -265,7 +268,7 @@ def explorer_window():
         + text(w - 20 - 62, 33, "File Types", 13, MUTED, 400, "middle")
     )
     side_x = w - 360
-    body = sunburst(side_x / 2, 56 + (h - 56 - 80) / 2, 92, 74)
+    body = sunburst(side_x / 2, 56 + (h - 56 - 80) / 2, *chart)
     body += text(side_x / 2, 56 + (h - 56 - 80) / 2 + 12, "312<tspan font-size='14' fill='%s' font-weight='500'> GB</tspan>" % MUTED, 30, TEXT, 700, "middle")
     body += f'<rect x="{side_x}" y="56" width="360" height="{h - 56 - 80}" fill="{SURFACE}"/><rect x="{side_x}" y="56" width="1" height="{h - 56 - 80}" fill="#ffffff" fill-opacity="0.07"/>'
     body += text(side_x + 20, 92, "Users", 16, TEXT, 600)
@@ -288,6 +291,8 @@ def explorer_window():
         )
     ty = h - 80
     body += f'<rect x="0" y="{ty}" width="{w}" height="80" fill="url(#tray)"/><rect x="0" y="{ty}" width="{w}" height="1" fill="#ffffff" fill-opacity="0.07"/>'
+    if tray:
+        return w, h, chrome(w, h, title) + body + tray(w, ty) + edge(w, h)
     body += f'<rect x="20" y="{ty + 16}" width="48" height="48" rx="14" fill="url(#ember)" filter="url(#btnglow)"/>'
     body += text(44, ty + 48, "3", 22, EMBER_INK, 700, "middle")
     body += text(84, ty + 50, f"23.9<tspan font-size='14' fill='{MUTED}' font-weight='500'> GB</tspan>", 22, TEXT, 700)
