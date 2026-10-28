@@ -35,19 +35,22 @@ pub fn rise(el: impl IntoElement, id: impl Into<ElementId>, order: usize) -> Any
         .into_any_element()
 }
 
-fn ago(at: Instant, admin: bool) -> String {
+fn ago(at: Instant, took: Duration, admin: bool) -> String {
     let who = if admin { " as administrator" } else { "" };
-    match at.elapsed().as_secs() {
-        s if s < 60 => format!("Scanned{who} just now"),
-        s if s < 3600 => format!("Scanned{who} {} min ago", s / 60),
-        s => format!("Scanned{who} {} h ago", s / 3600),
-    }
+    let when = match at.elapsed().as_secs() {
+        s if s < 60 => "just now".to_string(),
+        s if s < 3600 => format!("{} min ago", s / 60),
+        s => format!("{} h ago", s / 3600),
+    };
+    format!("Scanned{who} {when} in {}", format::duration(took))
 }
 
 /// What the home screen knows about a disk beyond its volume figures.
 #[derive(Clone)]
 struct Known {
     scanned: Option<Instant>,
+    /// How long the cached scan took.
+    took: Duration,
     admin: bool,
     lobes: Vec<Lobe>,
 }
@@ -56,6 +59,7 @@ fn known(app: &Burrdisk, volume: &Volume) -> Known {
     let scan = app.scans.get(&volume.mount);
     Known {
         scanned: scan.map(|s| s.scanned_at),
+        took: scan.map_or(Duration::ZERO, |s| s.tree.duration),
         admin: scan.is_some_and(|s| s.target.admin),
         lobes: scan.map(|s| s.lobes.clone()).unwrap_or_default(),
     }
@@ -98,7 +102,7 @@ fn spines(volume: &Volume, known: &Known, count: usize) -> Vec<Spine> {
 
 /// A disk's burr as it looks before a scan: lit spines for the space in use.
 pub fn fill_burr(id: impl Into<ElementId>, volume: &Volume, size: f32, count: usize, grow: f32) -> impl IntoElement {
-    let known = Known { scanned: None, admin: false, lobes: Vec::new() };
+    let known = Known { scanned: None, took: Duration::ZERO, admin: false, lobes: Vec::new() };
     let spines = spines(volume, &known, count);
     let core = gpui::hsla(0.07, 0.14, 0.13, 1.0);
     div().id(id).flex_none().size(px(size)).child(
@@ -447,7 +451,7 @@ fn lead(
                         .mt(px(18.))
                         .child(scan_button(app, &volume, &known, ButtonStyle::Primary, window, cx))
                         .when_some(known.scanned, |s, at| {
-                            s.child(div().text_xs().text_color(theme::accent_hi()).whitespace_nowrap().child(ago(at, known.admin)))
+                            s.child(div().text_xs().text_color(theme::accent_hi()).whitespace_nowrap().child(ago(at, known.took, known.admin)))
                         }),
                 )
                 .when(!app.full_disk_access && volumes::needs_full_disk_access(&volume.mount), |s| {

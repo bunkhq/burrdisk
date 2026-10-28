@@ -38,6 +38,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "hard-drive",
     "image",
     "inbox",
+    "loader-circle",
     "music",
     "network",
     "plus",

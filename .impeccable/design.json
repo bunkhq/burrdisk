@@ -527,9 +527,9 @@
         "purpose": "Popup menu entrance."
       },
       {
-        "name": "chip-in",
+        "name": "tile-in",
         "value": "280ms ease-out-quint, fade + 8px rise",
-        "purpose": "Tray chip entrance."
+        "purpose": "Shelf tile entrance."
       },
       {
         "name": "toast-in",
@@ -641,12 +641,12 @@
       "css": ".ds-row{display:flex;align-items:center;gap:12px;height:50px;padding:0 10px 0 8px;border-radius:11px;border:1px solid transparent;font:-apple-system, BlinkMacSystemFont, \"SF Pro Text\", system-ui, sans-serif;color:#f2f2f3;cursor:pointer;transition:background .13s,border-color .13s;width:320px;background:#1c1c1f;}.ds-row-tile{display:flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border-radius:9px;background:color-mix(in oklab,var(--c) 16%,transparent);border:1px solid color-mix(in oklab,var(--c) 30%,transparent);color:var(--c);transition:background .13s,box-shadow .13s;}.ds-row-body{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px;}.ds-row-name{font-size:14px;font-weight:500;}.ds-row-track{height:3px;border-radius:9999px;background:rgba(255,255,255,.08);}.ds-row-fill{height:100%;border-radius:9999px;background:color-mix(in oklab,var(--c) 75%,transparent);}.ds-row-size{font-size:12px;color:#a1a1a8;}.ds-row:hover{background:linear-gradient(90deg,color-mix(in oklab,var(--c) 16%,#1c1c1f),color-mix(in oklab,var(--c) 3%,#1c1c1f));border-color:color-mix(in oklab,var(--c) 28%,transparent);}.ds-row:hover .ds-row-tile{background:color-mix(in oklab,var(--c) 30%,transparent);box-shadow:0 6px 18px -4px color-mix(in oklab,var(--c) 34%,transparent),0 1px 2px rgba(0,0,0,.35);}.ds-row:hover .ds-row-fill{background:var(--c);}"
     },
     {
-      "name": "Tray Chip",
-      "kind": "chip",
-      "refersTo": "tray-chip",
-      "description": "A collected item waiting for the Trash, bordered in its data color.",
-      "html": "<div class=\"ds-chip\" style=\"--c:#7fb0e8\"><span class=\"ds-chip-tile\"><svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"/></svg></span><span class=\"ds-chip-name\">DerivedData</span><span class=\"ds-chip-size\">12.4 GB</span><button class=\"ds-chip-x\" aria-label=\"Remove\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M18 6 6 18\"/><path d=\"m6 6 12 12\"/></svg></button></div>",
-      "css": ".ds-chip{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 4px 0 8px;border-radius:9px;background:linear-gradient(180deg,#2a2a2f,#1c1c1f);border:1px solid color-mix(in oklab,var(--c) 35%,transparent);font:400 12px/1 -apple-system, BlinkMacSystemFont, \"SF Pro Text\", system-ui, sans-serif;color:#f2f2f3;}.ds-chip-tile{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:6px;background:color-mix(in oklab,var(--c) 22%,transparent);color:var(--c);}.ds-chip-name{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}.ds-chip-size{color:#6b6b73;}.ds-chip-x{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:8px;border:1px solid transparent;background:transparent;color:#a1a1a8;cursor:pointer;}.ds-chip-x:hover{background:#2a2a2f;color:#f2f2f3;}.ds-chip-x:focus-visible{outline:2px solid #fdba74;outline-offset:1px;}"
+      "name": "Shelf Tile",
+      "kind": "tile",
+      "refersTo": "shelf-tile",
+      "description": "A collected item on the Collector's shelf: icon and size over its name, as wide as its content, with names truncating past 168px. Drag it off the tray to put it back, or onto another tile to reorder.",
+      "html": "<div class=\"ds-tile\" style=\"--c:#4fb3e8\"><div class=\"ds-tile-top\"><svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z\"/></svg><span class=\"ds-tile-size\">80.7 GB</span></div><div class=\"ds-tile-name\">ProgramData</div></div>",
+      "css": ".ds-tile{position:relative;display:flex;flex-direction:column;justify-content:center;gap:5px;min-width:76px;height:58px;padding:0 9px;border-radius:10px;overflow:hidden;background:linear-gradient(180deg,#2a2a2f,#1c1c1f);font-family:-apple-system, BlinkMacSystemFont, \"SF Pro Text\", system-ui, sans-serif;color:#f2f2f3;cursor:grab;transition:background .13s;}.ds-tile:hover{background:linear-gradient(180deg,#36363c,#2a2a2f);}.ds-tile-top{display:flex;align-items:center;gap:6px;color:var(--c);}.ds-tile-size{font-size:11px;font-weight:600;color:#a1a1a8;}.ds-tile-name{max-width:168px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}"
     },
     {
       "name": "Burr",

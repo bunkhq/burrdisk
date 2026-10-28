@@ -49,11 +49,11 @@ impl Measure {
 
     /// A folder's children, largest first by this measure.
     fn children<'a>(self, tree: &'a Tree, id: NodeId) -> Cow<'a, [NodeId]> {
-        let children = &tree.node(id).children;
+        let children = tree.node(id).children;
         match self {
             Measure::Size => Cow::Borrowed(children),
             Measure::Count => {
-                let mut sorted = children.clone();
+                let mut sorted = children.to_vec();
                 sorted.sort_by(|a, b| tree.node(*b).items.cmp(&tree.node(*a).items));
                 Cow::Owned(sorted)
             }
