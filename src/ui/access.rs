@@ -21,7 +21,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
 
     let steps = [
         "Open Full Disk Access in System Settings",
-        "Turn on Burrdisk. If it isn\u{2019}t listed, click + and choose Burrdisk",
+        "Turn on Burrdisk. If it isn\u{2019}t listed, click + and choose Burrdisk.",
         "When macOS asks, choose Quit & Reopen, then scan again",
     ];
     let step_rows = steps.into_iter().enumerate().map(|(ix, text)| {
@@ -87,7 +87,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
             .text_sm()
             .text_color(theme::accent_hi())
             .child(icon(Icon::ShieldCheck, 15.0, theme::accent_hi()))
-            .child("Full Disk Access is on. Burrdisk can see the whole disk")
+            .child("Full Disk Access is on. Burrdisk can see the whole disk.")
     } else {
         div()
             .flex()
@@ -95,7 +95,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
             .gap_2()
             .text_xs()
             .text_color(theme::text_faint())
-            .child("Burrdisk only reads sizes. Nothing is opened, uploaded or changed")
+            .child("Burrdisk only reads sizes. Nothing is opened, uploaded or changed.")
     };
 
     let copy = div()
@@ -125,7 +125,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
                         .child(
                             "macOS keeps Mail, Messages, Safari, Photos and other apps\u{2019} data \
                              out of view until you allow Full Disk Access. Without it, all of that \
-                             lands in one Hidden space slice you can\u{2019}t open or clean up",
+                             lands in one Hidden space slice you can\u{2019}t open or clean up.",
                         ),
                 ),
         )
