@@ -2,5 +2,6 @@
 .DS_Store
 # Agent tooling stays local
 /.claude/
+/.impeccable/
 /CLAUDE.md
 /dist
