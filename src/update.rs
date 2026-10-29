@@ -246,6 +246,8 @@ fn summary(notes: &str) -> String {
     if text.chars().count() > 240 {
         let cut: String = text.chars().take(237).collect();
         format!("{}\u{2026}", cut.trim_end_matches(|c: char| !c.is_whitespace()).trim_end())
+    } else if text.trim_end_matches('.').contains(". ") {
+        text
     } else {
         text.strip_suffix('.').map(str::to_string).unwrap_or(text)
     }
