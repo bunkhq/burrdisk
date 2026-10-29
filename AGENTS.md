@@ -20,5 +20,6 @@ Burrdisk is a native disk space visualizer for macOS and Windows, written in Rus
 
 ## Text Conventions
 
-- Do not put periods at the end of comments or user-facing strings
+- Do not put periods at the end of comments
+- Do not put periods at the end of user-facing strings, unless the string is more than one sentence long
 
