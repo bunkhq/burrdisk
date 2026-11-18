@@ -49,7 +49,8 @@ impl Progress {
 /// Sets of files with the same contents
 #[derive(Default)]
 pub struct Dupes {
-    set_of: HashMap<NodeId, u32>,
+    /// Each file's set and its place in it
+    set_of: HashMap<NodeId, (u32, u32)>,
     /// Each set's members, the likely original first
     sets: Vec<Vec<NodeId>>,
 }
@@ -58,16 +59,27 @@ impl Dupes {
     /// The copies of the file still in the scan, itself included, or `None` when it
     /// has no copy left
     pub fn copies(&self, tree: &Tree, id: NodeId) -> Option<Vec<NodeId>> {
-        let set = &self.sets[*self.set_of.get(&id)? as usize];
-        let left: Vec<NodeId> = set.iter().copied().filter(|m| tree.is_attached(*m)).collect();
-        (left.len() > 1 && left.contains(&id)).then_some(left)
+        if !self.has_copy(tree, id) {
+            return None;
+        }
+        let set = &self.sets[self.set_of[&id].0 as usize];
+        Some(set.iter().copied().filter(|m| tree.is_attached(*m)).collect())
+    }
+
+    /// Whether the file is still in the scan with a copy that is too
+    pub fn has_copy(&self, tree: &Tree, id: NodeId) -> bool {
+        let Some(&(set, _)) = self.set_of.get(&id) else { return false };
+        tree.is_attached(id) && self.sets[set as usize].iter().any(|m| *m != id && tree.is_attached(*m))
     }
 
     /// Which set a file is in and its place there, for listing copies side by side
-    pub fn order(&self, id: NodeId) -> (u32, usize) {
-        let set = self.set_of.get(&id).copied().unwrap_or(u32::MAX);
-        let rank = self.sets.get(set as usize).and_then(|s| s.iter().position(|m| *m == id)).unwrap_or(0);
-        (set, rank)
+    pub fn order(&self, id: NodeId) -> (u32, u32) {
+        self.set_of.get(&id).copied().unwrap_or((u32::MAX, 0))
+    }
+
+    /// Every file that had a copy when the comparison ran
+    pub fn files(&self) -> impl Iterator<Item = NodeId> + '_ {
+        self.set_of.keys().copied()
     }
 }
 
@@ -96,8 +108,31 @@ pub fn candidates(tree: &Tree) -> Vec<Candidate> {
         .collect()
 }
 
-/// Compares the candidates' contents. `None` when cancelled
+/// Compares the candidates' contents. `None` when cancelled. Runs on a few threads
+/// of its own at background priority, so the rest of the computer stays responsive
+/// while it reads
 pub fn find(candidates: Vec<Candidate>, progress: &Progress) -> Option<Dupes> {
+    let threads = std::thread::available_parallelism().map_or(2, |n| n.get() / 4).clamp(1, 3);
+    match rayon::ThreadPoolBuilder::new().num_threads(threads).start_handler(|_| background_priority()).build() {
+        Ok(pool) => pool.install(|| compare(candidates, progress)),
+        Err(_) => compare(candidates, progress),
+    }
+}
+
+/// Lowers the thread's CPU and disk priority below what the user is doing
+fn background_priority() {
+    #[cfg(windows)]
+    unsafe {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
+        SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+    }
+    #[cfg(target_os = "macos")]
+    unsafe {
+        libc::setpriority(libc::PRIO_DARWIN_THREAD, 0, libc::PRIO_DARWIN_BG);
+    }
+}
+
+fn compare(candidates: Vec<Candidate>, progress: &Progress) -> Option<Dupes> {
     // First pass: length and both ends
     let sampled: Vec<(Candidate, Sample)> =
         candidates.into_par_iter().filter_map(|c| sample(&c.path, progress).map(|s| (c, s))).collect();
@@ -137,8 +172,8 @@ pub fn find(candidates: Vec<Candidate>, progress: &Progress) -> Option<Dupes> {
     for mut set in sets {
         set.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.path.cmp(&b.path)));
         let ix = dupes.sets.len() as u32;
-        for c in &set {
-            dupes.set_of.insert(c.id, ix);
+        for (rank, c) in set.iter().enumerate() {
+            dupes.set_of.insert(c.id, (ix, rank as u32));
         }
         dupes.sets.push(set.into_iter().map(|c| c.id).collect());
     }
