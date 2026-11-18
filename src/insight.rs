@@ -315,6 +315,22 @@ fn names(path: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Whether a path lies inside installed software rather than a project: an app
+/// bundle or its resources, Program Files, editor extensions, or packages installed
+/// globally. Their `node_modules` and the like are part of the app, which breaks
+/// without them
+fn installed(names: &[String]) -> bool {
+    names.iter().enumerate().any(|(ix, name)| {
+        let next = names.get(ix + 1).map(String::as_str);
+        name.ends_with(".app")
+            || matches!(name.as_str(), "resources" | "program files" | "program files (x86)" | "extensions" | ".nvm" | "nvm")
+            || (name == "local" && next == Some("programs"))
+            || (name == "roaming" && next == Some("npm"))
+            // Global packages: /usr/local/lib/node_modules, ~/.nvm/.../lib/node_modules
+            || (name == "lib" && next == Some("node_modules"))
+    })
+}
+
 /// What Burrdisk knows about an item, if anything
 pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
     let node = tree.node(id);
@@ -326,6 +342,7 @@ pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
         .iter()
         .find(|rule| {
             rule.os.here()
+                && !(rule.insight.project && installed(&path))
                 && rule.kind.is_none_or(|k| k == node.kind)
                 && path.len() >= rule.path.len()
                 && path[path.len() - rule.path.len()..].iter().zip(rule.path).all(|(a, b)| a == b)
@@ -386,5 +403,16 @@ mod tests {
         assert_eq!(explain(&tree, find("rust", "target")).unwrap().verdict, Safe);
         assert!(explain(&tree, find("other", "target")).is_none());
         assert!(!protected(&tree, find("web", "node_modules")));
+    }
+
+    #[test]
+    fn leaves_installed_apps_alone() {
+        let names = |path: &str| path.split('/').map(str::to_string).collect::<Vec<_>>();
+        assert!(installed(&names("users/me/appdata/local/programs/cursor/resources/app/node_modules")));
+        assert!(installed(&names("applications/slack.app/contents/resources/app/node_modules")));
+        assert!(installed(&names("users/me/.vscode/extensions/x/node_modules")));
+        assert!(installed(&names("users/me/appdata/roaming/npm/node_modules")));
+        assert!(installed(&names("usr/local/lib/node_modules")));
+        assert!(!installed(&names("users/me/code/web/node_modules")));
     }
 }
