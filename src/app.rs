@@ -1456,7 +1456,8 @@ impl Burrdisk {
                     _ => unreachable!(),
                 };
                 explorer.zoom = None;
-                explorer.relayout();
+                // Lets go of what moved, including a hover on it, and redraws
+                explorer.caught_up();
                 cx.notify();
                 // The result shows once the list of what moved has closed
                 let error = !failed.is_empty();
