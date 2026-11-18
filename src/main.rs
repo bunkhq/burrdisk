@@ -22,7 +22,10 @@ use gpui::{
 };
 use ui::px;
 
-use app::{Burrdisk, CheckForUpdates, ClearSearch, Collect, FindItems, GoBack, GoForward, GoUp, Preview, Quit};
+use app::{
+    Burrdisk, CheckForUpdates, ClearSearch, Collect, FindItems, GoBack, GoForward, GoUp, OpenSelected, Preview, Quit,
+    SelectNext, SelectPrevious,
+};
 
 fn main() -> std::process::ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -45,6 +48,13 @@ fn main() -> std::process::ExitCode {
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("alt-left", GoBack, None),
                 KeyBinding::new("alt-right", GoForward, None),
+                // The sidebar's rows, by keyboard: up and down select, Enter or Right
+                // opens, Left goes back up
+                KeyBinding::new("down", SelectNext, None),
+                KeyBinding::new("up", SelectPrevious, None),
+                KeyBinding::new("enter", OpenSelected, None),
+                KeyBinding::new("right", OpenSelected, Some("!searching")),
+                KeyBinding::new("left", GoBack, Some("!searching")),
             ]);
             // Quick Look is macOS only. Opening the hovered item instead would make
             // Space launch programs on Windows

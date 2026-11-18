@@ -60,6 +60,19 @@ Source: "{#SourceExe}"; DestDir: "{app}"; DestName: "Burrdisk.exe"; Flags: ignor
 Name: "{autoprograms}\Burrdisk"; Filename: "{app}\Burrdisk.exe"
 Name: "{autodesktop}\Burrdisk"; Filename: "{app}\Burrdisk.exe"; Tasks: desktopicon
 
+[Registry]
+; "Scan with Burrdisk" in File Explorer's right-click menu, on folders, inside a folder
+; and on drives. On Windows 11 it sits under Show more options
+Root: HKA; Subkey: "Software\Classes\Directory\shell\Burrdisk"; ValueType: string; ValueName: ""; ValueData: "Scan with Burrdisk"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\shell\Burrdisk"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Burrdisk.exe"",0"
+Root: HKA; Subkey: "Software\Classes\Directory\shell\Burrdisk\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Burrdisk.exe"" ""%1"""
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Burrdisk"; ValueType: string; ValueName: ""; ValueData: "Scan with Burrdisk"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Burrdisk"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Burrdisk.exe"",0"
+Root: HKA; Subkey: "Software\Classes\Directory\Background\shell\Burrdisk\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Burrdisk.exe"" ""%V"""
+Root: HKA; Subkey: "Software\Classes\Drive\shell\Burrdisk"; ValueType: string; ValueName: ""; ValueData: "Scan with Burrdisk"; Flags: uninsdeletekey
+Root: HKA; Subkey: "Software\Classes\Drive\shell\Burrdisk"; ValueType: string; ValueName: "Icon"; ValueData: """{app}\Burrdisk.exe"",0"
+Root: HKA; Subkey: "Software\Classes\Drive\shell\Burrdisk\command"; ValueType: string; ValueName: ""; ValueData: """{app}\Burrdisk.exe"" ""%1"""
+
 [Run]
 Filename: "{app}\Burrdisk.exe"; Description: "{cm:LaunchProgram,Burrdisk}"; Flags: nowait postinstall skipifsilent
 ; Burrdisk's own updater runs this installer silently with /relaunch=1 and quits;

@@ -18,7 +18,10 @@ use crate::theme;
 use crate::update::{self, Release};
 use crate::volumes::{self, Volume};
 
-actions!(burrdisk, [GoUp, GoBack, GoForward, Preview, Collect, Quit, CheckForUpdates, FindItems, ClearSearch]);
+actions!(
+    burrdisk,
+    [GoUp, GoBack, GoForward, Preview, Collect, Quit, CheckForUpdates, FindItems, ClearSearch, SelectNext, SelectPrevious, OpenSelected]
+);
 
 #[derive(Clone)]
 pub struct ScanTarget {
@@ -160,6 +163,9 @@ pub struct Explorer {
     pub search: Option<Search>,
     /// An item whose note is open in the sidebar, after it was clicked
     pub pinned: Option<NodeId>,
+    /// The sidebar's rows in order, as last drawn, for moving through them by keyboard
+    pub rows: Rc<std::cell::RefCell<Vec<Target>>>,
+    pub rows_scroll: gpui::ScrollHandle,
 }
 
 /// A search through the folder in focus
@@ -354,18 +360,33 @@ impl Burrdisk {
         this.refresh_volumes(cx);
         this.start_update_checks(cx);
         if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
-            let path = path.canonicalize().unwrap_or(path);
-            if let Some(volume) = volumes::list().into_iter().find(|v| v.mount == path) {
-                this.scan_volume(volume, cx);
-                return this;
-            }
-            let name = path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.display().to_string());
-            this.start_scan(ScanTarget { path, name, volume: None, admin: false }, cx);
+            this.open_path(path, cx);
         }
         this
+    }
+
+    /// Scans a folder or disk given by path: from the command line, File Explorer's
+    /// "Scan with Burrdisk", or a folder dropped on the window
+    pub fn open_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        // File Explorer passes a drive as "C:\", and the backslash escapes the closing
+        // quote, which then arrives as part of the path
+        let path = match path.to_str().and_then(|p| p.strip_suffix('"')) {
+            Some(trimmed) => PathBuf::from(format!("{trimmed}\\")),
+            None => path,
+        };
+        let path = path.canonicalize().map(|p| PathBuf::from(display_path(&p))).unwrap_or(path);
+        if !path.is_dir() {
+            return;
+        }
+        if let Some(volume) = volumes::list().into_iter().find(|v| v.mount == path) {
+            self.scan_volume(volume, cx);
+            return;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        self.open(ScanTarget { path, name, volume: None, admin: false }, cx);
     }
 
     pub fn refresh_volumes(&mut self, cx: &mut Context<Self>) {
@@ -588,6 +609,8 @@ impl Burrdisk {
             group_focus: None,
             search: None,
             pinned: None,
+            rows: Rc::default(),
+            rows_scroll: gpui::ScrollHandle::new(),
         });
         let mode = self.chart_mode;
         if let Some(explorer) = self.explorer() {
@@ -966,6 +989,31 @@ impl Burrdisk {
         cx.notify();
     }
 
+    fn on_select_next(&mut self, _: &SelectNext, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer() {
+            explorer.step_selection(1);
+            cx.notify();
+        }
+    }
+
+    fn on_select_previous(&mut self, _: &SelectPrevious, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer() {
+            explorer.step_selection(-1);
+            cx.notify();
+        }
+    }
+
+    /// Enter opens the selected row the way a click would
+    fn on_open_selected(&mut self, _: &OpenSelected, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        match explorer.hover {
+            Some(Hover::Target(Target::Node(id))) => explorer.activate(id),
+            Some(Hover::Target(Target::Group(g))) => explorer.open_group(Some(g)),
+            _ => return,
+        }
+        cx.notify();
+    }
+
     fn on_collect(&mut self, _: &Collect, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.keyboard_target()
             && let Some(explorer) = self.explorer()
@@ -1153,6 +1201,26 @@ impl Explorer {
             ChartMode::Count => Measure::Count,
             _ => Measure::Size,
         }
+    }
+
+    /// Moves the selection, which is the hover, `by` rows down the sidebar (up when
+    /// negative), starting from the first row, and keeps it in view
+    pub fn step_selection(&mut self, by: isize) {
+        let rows = self.rows.borrow().clone();
+        if rows.is_empty() {
+            return;
+        }
+        let current = match self.hover {
+            Some(Hover::Target(target)) => rows.iter().position(|t| *t == target),
+            _ => None,
+        };
+        let next = match current {
+            Some(ix) => (ix as isize + by).clamp(0, rows.len() as isize - 1) as usize,
+            None if by > 0 => 0,
+            None => rows.len() - 1,
+        };
+        self.set_hover(Some(Hover::Target(rows[next])));
+        self.rows_scroll.scroll_to_item(next);
     }
 
     /// Opens the search field, empty, without searching yet
@@ -1677,6 +1745,21 @@ impl Render for Burrdisk {
             .on_action(cx.listener(Self::on_find))
             .on_action(cx.listener(Self::on_clear_search))
             .on_key_down(cx.listener(Self::on_key))
+            .on_action(cx.listener(Self::on_select_next))
+            .on_action(cx.listener(Self::on_select_previous))
+            .on_action(cx.listener(Self::on_open_selected))
+            // A folder dropped anywhere on the window is scanned, unless a scan or a
+            // move to the Trash is under way
+            .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                let busy = match &this.screen {
+                    Screen::Scanning(_) => true,
+                    Screen::Explorer(e) => e.countdown.is_some() || e.trash_job.is_some(),
+                    _ => false,
+                };
+                if let Some(path) = paths.paths().first().filter(|_| !busy) {
+                    this.open_path(path.clone(), cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| this.check_for_updates(cx)))
             // The mouse's side buttons (and two-finger swipes) step back and forward
             .on_mouse_down(

@@ -1565,6 +1565,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         })
         .collect();
 
+    *explorer.rows.borrow_mut() = rows.iter().map(|r| r.target).collect();
     let rows: Vec<AnyElement> = rows
         .into_iter()
         .enumerate()
@@ -1724,6 +1725,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                 .flex_1()
                 .min_h_0()
                 .overflow_y_scroll()
+                .track_scroll(&explorer.rows_scroll)
                 .pb_2()
                 .when(no_matches, |s| {
                     s.child(
