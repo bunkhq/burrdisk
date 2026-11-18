@@ -288,9 +288,11 @@ mod tests {
         // The search waits for the comparison, then lists copies side by side
         let query = crate::search::Query::parse("is:dup .mov");
         let now = crate::format::unix_now();
-        assert!(crate::search::run(&tree, Tree::ROOT, &query, now, None).matches.is_empty());
+        let none = crate::search::Compared::default();
+        assert!(crate::search::run(&tree, Tree::ROOT, &query, now, none).matches.is_empty());
         let found = std::rc::Rc::new(found);
-        let results = crate::search::run(&tree, Tree::ROOT, &query, now, Some(&found));
+        let compared = crate::search::Compared { dupes: Some(&found), ..none };
+        let results = crate::search::run(&tree, Tree::ROOT, &query, now, compared);
         assert_eq!(names(results.matches.clone()), vec!["film.mov", "film copy.mov"]);
     }
 }

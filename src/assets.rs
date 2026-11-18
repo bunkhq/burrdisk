@@ -49,6 +49,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "shield-alert",
     "shield-check",
     "trash",
+    "trending-up",
     "usb",
     "video",
     "window-close",

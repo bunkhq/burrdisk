@@ -10,6 +10,7 @@
 //!   dependencies of projects not touched in two weeks
 //! - `is:dup` matches files with a copy elsewhere in the scan, once their contents
 //!   are compared
+//! - `is:grown` matches the folders that grew most since an earlier scan
 //!
 //! Results are the outermost matches: a matching folder stands for everything in it
 
@@ -17,6 +18,7 @@ use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::dupes::Dupes;
+use crate::history::Growth;
 
 use crate::scan::{NodeId, NodeKind, Tree};
 
@@ -38,14 +40,26 @@ pub struct Query {
     safe: bool,
     /// Only files with a copy elsewhere
     pub dupes: bool,
+    /// Only folders that grew since an earlier scan
+    pub grown: bool,
 }
 
 /// The query for suggestions
 pub const SAFE: &str = "is:safe";
 /// The query for duplicates
 pub const DUPES: &str = "is:dup";
+/// The query for what grew
+pub const GROWN: &str = "is:grown";
 /// Queries the field shows as chips; Backspace takes each away in one press
-pub const CHIPS: [&str; 2] = [SAFE, DUPES];
+pub const CHIPS: [&str; 3] = [SAFE, DUPES, GROWN];
+
+/// What some queries need beyond the scan: copies found by comparing contents, and
+/// what grew since an earlier scan
+#[derive(Clone, Copy, Default)]
+pub struct Compared<'a> {
+    pub dupes: Option<&'a Rc<Dupes>>,
+    pub growth: Option<&'a Rc<Growth>>,
+}
 
 enum Unit {
     Bytes(u64),
@@ -117,6 +131,8 @@ impl Query {
                 query.safe = true;
             } else if token == DUPES {
                 query.dupes = true;
+            } else if token == GROWN {
+                query.grown = true;
             } else if let Some(ext) = token.strip_prefix("*.").or_else(|| token.strip_prefix('.')).filter(|e| !e.is_empty()) {
                 query.exts.push(format!(".{ext}"));
             } else if token != ">" && token != "<" {
@@ -139,9 +155,10 @@ impl Query {
             && self.newer_than.is_none()
             && !self.safe
             && !self.dupes
+            && !self.grown
     }
 
-    fn matches(&self, tree: &Tree, id: NodeId, now: u32, dupes: Option<&Dupes>) -> bool {
+    fn matches(&self, tree: &Tree, id: NodeId, now: u32, compared: Compared) -> bool {
         let node = tree.node(id);
         if node.kind == NodeKind::Hidden || (node.kind == NodeKind::Dir && self.files_only()) {
             return false;
@@ -164,7 +181,10 @@ impl Query {
         if !self.words.iter().all(|w| contains_ci(node.name, w)) {
             return false;
         }
-        if self.dupes && !dupes.is_some_and(|d| d.copies(tree, id).is_some()) {
+        if self.dupes && !compared.dupes.is_some_and(|d| d.copies(tree, id).is_some()) {
+            return false;
+        }
+        if self.grown && !compared.growth.is_some_and(|g| g.grew(id).is_some()) {
             return false;
         }
         !self.safe || crate::insight::suggested(tree, id, now)
@@ -196,6 +216,9 @@ pub struct Results {
     pub holders: HashSet<NodeId>,
     /// The copies the matches are among, when the query asks for duplicates
     pub dupes: Option<Rc<Dupes>>,
+    /// How much each match grew, when the query asks what grew. `total_size` is
+    /// then the growth
+    pub growth: Option<Rc<Growth>>,
 }
 
 impl Results {
@@ -221,25 +244,31 @@ impl Results {
 
 
 /// Finds every outermost match under `root`, not counting `root` itself. A query for
-/// duplicates finds nothing until `dupes` holds what comparing contents found
-pub fn run(tree: &Tree, root: NodeId, query: &Query, now: u32, dupes: Option<&Rc<Dupes>>) -> Results {
-    let dupes = dupes.filter(|_| query.dupes);
+/// duplicates or growth finds nothing until `compared` holds what it needs
+pub fn run(tree: &Tree, root: NodeId, query: &Query, now: u32, compared: Compared) -> Results {
+    let dupes = compared.dupes.filter(|_| query.dupes);
+    let growth = compared.growth.filter(|_| query.grown);
+    let waiting = (query.dupes && dupes.is_none()) || (query.grown && growth.is_none());
     let mut matches = Vec::new();
-    let mut stack: Vec<NodeId> = if query.dupes && dupes.is_none() { Vec::new() } else { tree.node(root).children.to_vec() };
+    let mut stack: Vec<NodeId> = if waiting { Vec::new() } else { tree.node(root).children.to_vec() };
     while let Some(id) = stack.pop() {
-        if query.matches(tree, id, now, dupes.map(|d| &**d)) {
+        if query.matches(tree, id, now, compared) {
             matches.push(id);
         } else {
             stack.extend_from_slice(tree.node(id).children);
         }
     }
+    let size = |id: &NodeId| match growth {
+        Some(g) => g.grew(*id).unwrap_or(0),
+        None => tree.node(*id).size,
+    };
     match dupes {
         // Copies of one file side by side, the likely original first
-        Some(d) => matches.sort_by_key(|id| (std::cmp::Reverse(tree.node(*id).size), d.order(*id))),
-        None => matches.sort_by_key(|id| std::cmp::Reverse(tree.node(*id).size)),
+        Some(d) => matches.sort_by_key(|id| (std::cmp::Reverse(size(id)), d.order(*id))),
+        None => matches.sort_by_key(|id| std::cmp::Reverse(size(id))),
     }
     let matched = matches.iter().copied().collect();
-    let total_size = matches.iter().map(|id| tree.node(*id).size).sum();
+    let total_size = matches.iter().map(size).sum();
     let mut holders = HashSet::new();
     for &id in &matches {
         let mut cursor = tree.node(id).parent;
@@ -250,7 +279,7 @@ pub fn run(tree: &Tree, root: NodeId, query: &Query, now: u32, dupes: Option<&Rc
             cursor = tree.node(parent).parent;
         }
     }
-    Results { matches, matched, total_size, holders, dupes: dupes.cloned() }
+    Results { matches, matched, total_size, holders, dupes: dupes.cloned(), growth: growth.cloned() }
 }
 
 #[cfg(test)]
@@ -288,25 +317,25 @@ mod tests {
         let names = |r: &Results| r.matches.iter().map(|id| tree.node(*id).name.to_string()).collect::<Vec<_>>();
 
         // The nested node_modules folds into the outer one
-        let r = run(&tree, Tree::ROOT, &Query::parse("node_modules"), now, None);
+        let r = run(&tree, Tree::ROOT, &Query::parse("node_modules"), now, Compared::default());
         assert_eq!(names(&r), vec!["node_modules"]);
         assert_eq!(r.holders.len(), 1);
 
-        let r = run(&tree, Tree::ROOT, &Query::parse(".mp4"), now, None);
+        let r = run(&tree, Tree::ROOT, &Query::parse(".mp4"), now, Compared::default());
         assert_eq!(names(&r), vec!["Trip.MP4"]);
         assert_eq!(r.presence(&tree, r.matches[0], Tree::ROOT), 1.0);
 
         // A size alone finds files, not the folders around them
-        let r = run(&tree, Tree::ROOT, &Query::parse(">100kb"), now, None);
+        let r = run(&tree, Tree::ROOT, &Query::parse(">100kb"), now, Compared::default());
         assert_eq!(names(&r), vec!["Trip.MP4"]);
 
         // Fresh dependencies belong to a project in use, so they aren't suggested
-        assert!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now, None).matches.is_empty());
-        assert_eq!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now + 30 * DAY, None).matches.len(), 1);
+        assert!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now, Compared::default()).matches.is_empty());
+        assert_eq!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now + 30 * DAY, Compared::default()).matches.len(), 1);
 
         // Everything was just written, so nothing is a year old
-        assert!(run(&tree, Tree::ROOT, &Query::parse(">1y"), now, None).matches.is_empty());
-        let r = run(&tree, Tree::ROOT, &Query::parse("<1d"), now, None);
+        assert!(run(&tree, Tree::ROOT, &Query::parse(">1y"), now, Compared::default()).matches.is_empty());
+        let r = run(&tree, Tree::ROOT, &Query::parse("<1d"), now, Compared::default());
         assert_eq!(r.matches.len(), 2);
     }
 }

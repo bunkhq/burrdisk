@@ -168,6 +168,9 @@ pub struct Explorer {
     pub rows_scroll: gpui::ScrollHandle,
     /// Copies found by comparing contents, once a search first asks for them
     pub dupes: Option<Dupes>,
+    /// What grew since an earlier scan of the same folder or disk, once loaded
+    pub growth: Option<Rc<crate::history::Growth>>,
+    _history: Option<Task<()>>,
 }
 
 /// Comparing file contents for the `is:dup` search, which starts the first time a
@@ -580,6 +583,10 @@ impl Burrdisk {
                 tree.add_hidden_space(hidden);
             }
         }
+        // Remember the scan, to show next time what grew
+        let snapshot = crate::history::Snapshot::of(&tree, crate::format::unix_now());
+        let root = target.path.clone();
+        cx.background_executor().spawn(async move { crate::history::save(&root, &snapshot) }).detach();
         self.open_explorer(target, tree, Instant::now(), cx);
     }
 
@@ -633,12 +640,35 @@ impl Burrdisk {
             rows: Rc::default(),
             rows_scroll: gpui::ScrollHandle::new(),
             dupes: None,
+            growth: None,
+            _history: None,
         });
         let mode = self.chart_mode;
         if let Some(explorer) = self.explorer() {
             explorer.set_mode(mode);
         }
+        self.load_history(cx);
         cx.notify();
+    }
+
+    /// Finds the earlier scan to compare with and what grew since, in the background
+    fn load_history(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        let root = explorer.target.path.clone();
+        let past =
+            cx.background_executor().spawn(async move { crate::history::previous(&root, crate::format::unix_now()) });
+        // The task ends with the explorer, which drops it
+        explorer._history = Some(cx.spawn(async move |this, cx| {
+            let Some(past) = past.await else { return };
+            this.update(cx, |this, cx| {
+                if let Some(explorer) = this.explorer() {
+                    explorer.growth = Some(Rc::new(crate::history::Growth::compare(&explorer.tree, &past)));
+                    explorer.run_search();
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
     }
 
     pub fn cancel_scan(&mut self, cx: &mut Context<Self>) {
@@ -1307,12 +1337,13 @@ impl Explorer {
         if query.dupes && self.dupes.is_none() {
             self.dupes = Some(Dupes::Wanted);
         }
-        let found = match &self.dupes {
+        let dupes = match &self.dupes {
             Some(Dupes::Found(found)) => Some(found),
             _ => None,
         };
+        let compared = crate::search::Compared { dupes, growth: self.growth.as_ref() };
         search.results = (!query.is_empty())
-            .then(|| Rc::new(crate::search::run(&self.tree, self.focus, &query, crate::format::unix_now(), found)));
+            .then(|| Rc::new(crate::search::run(&self.tree, self.focus, &query, crate::format::unix_now(), compared)));
     }
 
     /// Search results, while a search has any query

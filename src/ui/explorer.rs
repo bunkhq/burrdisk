@@ -1324,6 +1324,12 @@ fn search_listing(explorer: &Explorer, results: &search::Results) -> Listing {
             if let Some(copies) = results.dupes.as_ref().and_then(|d| d.copies(&explorer.tree, id)) {
                 row.note = Some(format!("{} copies", copies.len()));
             }
+            // What grew lists by growth, and shows it in place of the size
+            if let Some(grew) = results.growth.as_ref().and_then(|g| g.grew(id)) {
+                row.figure = format!("+{}", format::bytes(grew));
+                row.ratio = grew as f32 / results.total_size.max(1) as f32;
+                row.note = Some(format!("Now {}", format::bytes(explorer.tree.node(id).size)));
+            }
             row
         })
         .collect();
@@ -1333,15 +1339,20 @@ fn search_listing(explorer: &Explorer, results: &search::Results) -> Listing {
             let of = if files == 1 { "1 file".to_string() } else { format!("{} files", format::count(files as u64)) };
             format!("{} copies of {of}", format::count(results.matches.len() as u64))
         }
-        None => matches_label(results.matches.len()),
+        None => match &results.growth {
+            Some(growth) => crate::history::since(growth.since, format::unix_now()),
+            None => matches_label(results.matches.len()),
+        },
     };
+    let (num, unit) = format::bytes_parts(results.total_size);
+    let num = if results.growth.is_some() { format!("+{num}") } else { num };
     Listing {
         // One list for the whole search, so rows already shown stay put while typing
         key: format!("{}-search", explorer.focus),
         title: focus.name.to_string(),
         title_color: theme::text_muted().into(),
         title_icon: Icon::Search,
-        figure: format::bytes_parts(results.total_size),
+        figure: (num, unit),
         aside,
         rows,
         remaining: results.matches.len().saturating_sub(MAX_ROWS),
@@ -1434,9 +1445,13 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
         })
 }
 
-/// A chip query as the field shows it: "Safe to clear" or "Duplicates"
+/// A chip query as the field shows it: "Safe to clear", "Duplicates" or "Grew"
 fn query_chip(query: &str) -> gpui::Div {
-    let (glyph, label) = if query == search::DUPES { (Icon::Copy, "Duplicates") } else { (Icon::Check, "Safe to clear") };
+    let (glyph, label) = match query {
+        search::DUPES => (Icon::Copy, "Duplicates"),
+        search::GROWN => (Icon::TrendingUp, "Grew"),
+        _ => (Icon::Check, "Safe to clear"),
+    };
     div()
         .flex()
         .flex_none()
@@ -1500,7 +1515,7 @@ fn search_hint(cx: &mut Context<Burrdisk>) -> impl IntoElement {
         .text_color(theme::text_faint())
         .child("Try")
         .children(
-            [("node_modules", "node_modules"), (".mov", ".mov"), (">1gb", ">1gb"), (">1y", ">1y"), ("duplicates", search::DUPES)]
+            [("node_modules", "node_modules"), (".mov", ".mov"), (">1gb", ">1gb"), (">1y", ">1y"), ("duplicates", search::DUPES), ("what grew", search::GROWN)]
                 .into_iter()
                 .enumerate()
                 .map(|(ix, (label, example))| {
@@ -1563,6 +1578,22 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         explorer.search.as_ref().is_some_and(|s| search::Query::parse(&s.text).dupes)
     });
     let no_matches = results.is_some_and(|r| r.matches.is_empty()) && comparing.is_none();
+    // What grew needs an earlier scan, and says so when there's none or nothing grew
+    let grown_query = explorer.search.as_ref().is_some_and(|s| search::Query::parse(&s.text).grown);
+    let (empty_title, empty_detail) = match (&explorer.growth, grown_query) {
+        (None, true) => (
+            "Nothing to compare with yet".to_string(),
+            "Burrdisk remembers each scan. Scan this again another day to see what grew".to_string(),
+        ),
+        (Some(growth), true) => (
+            format!("Nothing grew by {} or more", format::bytes(crate::history::MIN_GROWTH)),
+            format!(
+                "Compared with your scan from {}",
+                format::ago(growth.since, format::unix_now()).unwrap_or_default().to_lowercase()
+            ),
+        ),
+        _ => ("Nothing here matches".to_string(), "Try fewer words, or search again from a folder further up".to_string()),
+    };
     // Of duplicates, a copy is left behind, so only those with another copy kept count
     let collectable = results.map_or(0, |r| {
         r.matches
@@ -1626,6 +1657,11 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                         s.child(footer_row("Purgeable", format::bytes(volume.purgeable())))
                     })
                     .child(footer_row("Capacity", format::bytes(volume.total)))
+            })
+            .when_some(explorer.growth.as_ref(), |s, growth| {
+                let sign = if growth.total < 0 { "\u{2212}" } else { "+" };
+                let label = crate::history::since(growth.since, format::unix_now());
+                s.child(footer_row(label, format!("{sign}{}", format::bytes(growth.total.unsigned_abs()))))
             })
             .child(footer_row("Scan time", format::duration(explorer.tree.duration)))
     });
@@ -1772,13 +1808,8 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                             .gap_1()
                             .px_5()
                             .py_3()
-                            .child(div().text_sm().text_color(theme::text_muted()).child("Nothing here matches"))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme::text_faint())
-                                    .child("Try fewer words, or search again from a folder further up"),
-                            ),
+                            .child(div().text_sm().text_color(theme::text_muted()).child(empty_title))
+                            .child(div().text_xs().text_color(theme::text_faint()).child(empty_detail)),
                     )
                 })
                 .children(rows)
@@ -1999,12 +2030,12 @@ fn access_panel() -> impl IntoElement {
         )
 }
 
-fn footer_row(label: &'static str, value: String) -> impl IntoElement {
+fn footer_row(label: impl Into<SharedString>, value: String) -> impl IntoElement {
     div()
         .flex()
         .justify_between()
         .text_xs()
-        .child(div().text_color(theme::text_faint()).child(label))
+        .child(div().text_color(theme::text_faint()).child(label.into()))
         .child(div().text_color(theme::text_muted()).child(value))
 }
 

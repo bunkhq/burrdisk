@@ -7,6 +7,7 @@ mod assets;
 mod dupes;
 mod filetype;
 mod format;
+mod history;
 mod insight;
 mod platform;
 mod scan;
