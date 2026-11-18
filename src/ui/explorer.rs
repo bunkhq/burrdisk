@@ -13,8 +13,9 @@ use crate::ui::px;
 use crate::appicon;
 use crate::app::{
     self, Burrdisk, ChartDrag, ChartMode, DragItem, Explorer, Hover, NOTICE_DURATION, Notice, Screen, ShelfItem,
-    TRASH_COUNTDOWN,
+    TRASH_COUNTDOWN, Tone,
 };
+use crate::insight::{self, Action, Insight, Verdict};
 use crate::filetype::{self, Breakdown, Category};
 use crate::format;
 use crate::platform;
@@ -179,8 +180,11 @@ fn item_menu(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -
 
 /// A pill floating above the tray with the result of the last Trash operation
 fn toast(notice: Notice) -> AnyElement {
-    let tone: Hsla = if notice.error { theme::danger().into() } else { gpui::hsla(0.40, 0.6, 0.55, 1.0) };
-    let glyph = if notice.error { Icon::X } else { Icon::Trash };
+    let (tone, glyph): (Hsla, Icon) = match notice.tone {
+        Tone::Failed => (theme::danger().into(), Icon::X),
+        Tone::Done => (gpui::hsla(0.40, 0.6, 0.55, 1.0), Icon::Trash),
+        Tone::Info => (theme::text_muted().into(), Icon::Check),
+    };
     let left = NOTICE_DURATION.as_secs_f32() - notice.shown.elapsed().as_secs_f32();
     div()
         .absolute()
@@ -513,9 +517,16 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         (Some(Hover::Target(Target::Node(id))), _) => {
             let node = explorer.tree.node(id);
             let hint = if breakdown.is_some() { hint_for(NodeKind::File) } else { hint_for(node.kind) };
+            // Things Burrdisk knows say what they are, and open their note on a click
+            let hint = match insight::explain(&explorer.tree, id) {
+                Some(_) if node.kind == NodeKind::Hidden => "Click to see why".to_string(),
+                Some(note) if node.kind == NodeKind::Dir => format!("{} \u{b7} Click to open", note.tag),
+                Some(note) => format!("{} \u{b7} Click to learn more", note.tag),
+                None => hint.to_string(),
+            };
             let hint = match explorer.mode {
-                ChartMode::Age => changed(explorer, id).unwrap_or_else(|| hint.into()),
-                _ => hint.into(),
+                ChartMode::Age => changed(explorer, id).unwrap_or(hint),
+                _ => hint,
             };
             (node.name.to_string(), figure(explorer, id), hint)
         }
@@ -663,7 +674,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                 }
                 // File types open like folders; the files inside them don't
                 Some(Hover::Target(Target::Group(g))) => explorer.open_group(Some(g)),
-                Some(Hover::Target(Target::Node(id))) if explorer.mode != ChartMode::Types => explorer.set_focus(id),
+                Some(Hover::Target(Target::Node(id))) if explorer.mode != ChartMode::Types => explorer.activate(id),
                 _ => return,
             }
             cx.notify();
@@ -933,6 +944,8 @@ struct Row {
     node: Option<NodeId>,
     /// Clicking opens it in the chart
     opens: bool,
+    /// Clicking shows its note
+    explains: bool,
     collected: bool,
     muted: bool,
 }
@@ -941,7 +954,8 @@ struct Row {
 const COMPACT_RATIO: f32 = 0.001;
 
 fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: bool, cx: &mut Context<Burrdisk>) -> AnyElement {
-    let Row { key, target, name, detail, glyph, app, color, ratio, figure, note, place, node, opens, collected, muted } = row;
+    let Row { key, target, name, detail, glyph, app, color, ratio, figure, note, place, node, opens, explains, collected, muted } =
+        row;
     let app = app.and_then(|ext| appicon::for_extension(&ext, cx));
     // A row stays lit while its right-click menu is open
     let is_hovered = explorer.hover == Some(Hover::Target(target))
@@ -962,7 +976,7 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
             linear_color_stop(color.opacity(0.16 * t), 0.),
             linear_color_stop(color.opacity(0.03 * t), 1.),
         ))
-        .when(opens, |s| s.cursor_pointer())
+        .when(opens || explains, |s| s.cursor_pointer())
         .when(collected, |s| s.opacity(0.4))
         .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
             let Some(explorer) = this.explorer() else { return };
@@ -976,11 +990,11 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
             explorer.set_hover(next);
             cx.notify();
         }))
-        .when(opens, |s| {
+        .when(opens || explains, |s| {
             s.on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(explorer) = this.explorer() {
                     match target {
-                        Target::Node(id) => explorer.set_focus(id),
+                        Target::Node(id) => explorer.activate(id),
                         Target::Group(g) => explorer.open_group(Some(g)),
                         _ => return,
                     }
@@ -1130,11 +1144,13 @@ fn node_row(explorer: &Explorer, id: NodeId, whole: u64, color: Hsla) -> Row {
         ChartMode::Count => node.items,
         _ => node.size,
     };
+    let known = insight::explain(&explorer.tree, id);
     Row {
         key: ("row", id as usize),
         target: Target::Node(id),
         name: node.name.to_string(),
-        detail: None,
+        // Hidden space's note is its name already
+        detail: known.filter(|_| node.kind != NodeKind::Hidden).map(|k| k.tag),
         glyph: item_icon(node.name, node.kind),
         app: appicon::extension_for(node.name, node.kind),
         color,
@@ -1146,6 +1162,7 @@ fn node_row(explorer: &Explorer, id: NodeId, whole: u64, color: Hsla) -> Row {
         place: None,
         node: (node.kind != NodeKind::Hidden).then_some(id),
         opens: node.kind == NodeKind::Dir && !types,
+        explains: node.kind != NodeKind::Dir && known.is_some(),
         collected: explorer.is_collected(id),
         muted: node.kind == NodeKind::Hidden,
     }
@@ -1171,6 +1188,7 @@ fn group_row(breakdown: &Breakdown, g: u32, whole: u64, detail: bool) -> Row {
         place: None,
         node: None,
         opens: true,
+        explains: false,
         collected: false,
         muted: false,
     }
@@ -1484,7 +1502,8 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         .collect();
 
     let at_root = folder == Some(Tree::ROOT);
-    let addable = folder.is_some_and(|f| f != Tree::ROOT && !explorer.is_collected(f));
+    let addable = folder
+        .is_some_and(|f| f != Tree::ROOT && !explorer.is_collected(f) && !insight::protected(&explorer.tree, f));
     let reveal_path = folder.map(|f| explorer.tree.path(f));
 
     let footer = at_root.then(|| {
@@ -1621,6 +1640,13 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                         .children(strip),
                 ),
         )
+        .children(
+            explorer
+                .explained()
+                // A search lists results, not the folder, so only a clicked item's note shows
+                .filter(|(_, _, pinned)| *pinned || results.is_none())
+                .map(|(id, note, pinned)| insight_card(explorer, id, note, pinned, cx)),
+        )
         .when(access_hint, |s| s.child(access_panel()))
         .child(
             div()
@@ -1659,6 +1685,132 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                 }),
         )
         .children(footer)
+}
+
+/// What a well-known item is and how to clear it: under the sidebar's header for the
+/// folder listed, or for an item that was clicked, which the X puts away
+fn insight_card(explorer: &Explorer, id: NodeId, note: Insight, pinned: bool, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    let name = explorer.tree.node(id).name.to_string();
+    let (glyph, tone): (Icon, Hsla) = match note.verdict {
+        Verdict::Safe => (Icon::Check, theme::accent_hi().into()),
+        Verdict::Review => (Icon::Search, theme::text_muted().into()),
+        Verdict::Elsewhere => (Icon::ArrowUpRight, theme::text_muted().into()),
+        Verdict::Keep => (Icon::ShieldCheck, theme::text_muted().into()),
+    };
+    // Rescanning needs a whole disk to rescan
+    let action = note.action.filter(|a| *a != Action::RescanAsAdmin || explorer.target.volume.is_some());
+    let command = match action {
+        Some(Action::Copy(command)) => Some(command),
+        _ => None,
+    };
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .mx_3()
+        .mb_2()
+        .p_3()
+        .rounded(px(10.))
+        .bg(theme::bg())
+        .text_xs()
+        .child(
+            div()
+                .flex()
+                .items_baseline()
+                .gap_2()
+                .child(div().flex_none().text_sm().font_weight(FontWeight::SEMIBOLD).child(note.tag))
+                // The listed folder's name is the header's already
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .whitespace_nowrap()
+                        .text_color(theme::text_faint())
+                        .when(pinned, |s| s.child(name)),
+                )
+                .when(pinned, |s| {
+                    s.child(
+                        icon_button(
+                            "close-note",
+                            Icon::X,
+                            cx.listener(|this, _, _, cx| {
+                                if let Some(explorer) = this.explorer() {
+                                    explorer.pinned = None;
+                                    cx.notify();
+                                }
+                            }),
+                        )
+                        .size(px(22.))
+                        .mt(px(-4.))
+                        .mr(px(-4.)),
+                    )
+                }),
+        )
+        .child(div().text_size(px(12.5)).text_color(theme::text_muted()).child(note.about))
+        .when_some(note.how, |s, how| s.child(div().text_size(px(12.5)).child(how)))
+        .when_some(command, |s, command| {
+            s.child(
+                div()
+                    .flex()
+                    .child(div().px_1p5().py_0p5().rounded(px(6.)).bg(theme::track()).text_color(theme::text_muted()).child(command)),
+            )
+        })
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1p5()
+                .mt_0p5()
+                .min_h(px(26.))
+                .child(icon(glyph, 13.0, tone))
+                .child(div().flex_1().min_w_0().font_weight(FontWeight::SEMIBOLD).text_color(tone).child(note.verdict.label()))
+                .when_some(action, |s, action| {
+                    s.child(
+                        button(
+                            "note-action",
+                            action.label(),
+                            ButtonStyle::Ghost,
+                            cx.listener(move |this, _, _, cx| run_action(this, action, cx)),
+                        )
+                        .h(px(26.))
+                        .px(px(10.))
+                        .text_xs()
+                        .mr(px(-6.)),
+                    )
+                }),
+        )
+        .with_animation(
+            ElementId::Name(format!("note-{id}").into()),
+            Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
+            |el, t| el.opacity(t).mt(px(-6. * (1. - t))),
+        )
+}
+
+fn run_action(this: &mut Burrdisk, action: Action, cx: &mut Context<Burrdisk>) {
+    match action {
+        Action::Copy(command) => {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(command.to_string()));
+            if let Some(explorer) = this.explorer() {
+                explorer.notice = Some(Notice {
+                    text: format!("Copied \u{201c}{command}\u{201d}").into(),
+                    tone: Tone::Info,
+                    shown: std::time::Instant::now(),
+                });
+            }
+        }
+        Action::Open(url) => cx.open_url(url),
+        Action::Launch(program) => {
+            let _ = std::process::Command::new(program).spawn();
+        }
+        Action::RescanAsAdmin => {
+            if let Some(volume) = this.explorer().and_then(|e| e.target.volume.clone()) {
+                this.rescan_volume(volume, true, cx);
+                return;
+            }
+        }
+    }
+    cx.notify();
 }
 
 /// Explains Hidden space and leads straight to the setting that shrinks it

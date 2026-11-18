@@ -158,6 +158,8 @@ pub struct Explorer {
     pub group_focus: Option<u32>,
     /// The search field, while it's open
     pub search: Option<Search>,
+    /// An item whose note is open in the sidebar, after it was clicked
+    pub pinned: Option<NodeId>,
 }
 
 /// A search through the folder in focus
@@ -231,8 +233,18 @@ pub const SIDEBAR_WIDTH: f32 = 360.0;
 #[derive(Clone)]
 pub struct Notice {
     pub text: SharedString,
-    pub error: bool,
+    pub tone: Tone,
     pub shown: Instant,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    /// Items moved to the Trash
+    Done,
+    /// Something couldn't be moved
+    Failed,
+    /// Neither: a note, e.g. why something can't be collected
+    Info,
 }
 
 pub const NOTICE_DURATION: Duration = Duration::from_secs(6);
@@ -575,6 +587,7 @@ impl Burrdisk {
             group_preview: None,
             group_focus: None,
             search: None,
+            pinned: None,
         });
         let mode = self.chart_mode;
         if let Some(explorer) = self.explorer() {
@@ -1052,7 +1065,7 @@ impl Burrdisk {
     pub fn show_notice(&mut self, text: String, error: bool, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer() else { return };
         let shown = Instant::now();
-        explorer.notice = Some(Notice { text: text.into(), error, shown });
+        explorer.notice = Some(Notice { text: text.into(), tone: if error { Tone::Failed } else { Tone::Done }, shown });
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(NOTICE_DURATION).await;
             this.update(cx, |this, cx| {
@@ -1227,6 +1240,7 @@ impl Explorer {
             return;
         }
         self.mode = mode;
+        self.pinned = None;
         self.zoom = None;
         self.hover = None;
         self.prev_hover = None;
@@ -1238,10 +1252,32 @@ impl Explorer {
         self.relayout();
     }
 
+    /// What clicking an item does: a folder opens, and anything Burrdisk knows about
+    /// shows its note
+    pub fn activate(&mut self, id: NodeId) {
+        if self.tree.node(id).kind == NodeKind::Dir {
+            self.set_focus(id);
+        } else if crate::insight::explain(&self.tree, id).is_some() {
+            self.pinned = Some(id);
+        }
+    }
+
+    /// The item whose note the sidebar shows: the one clicked, else the folder listed
+    pub fn explained(&self) -> Option<(NodeId, crate::insight::Insight, bool)> {
+        if let Some(id) = self.pinned.filter(|id| self.tree.is_attached(*id))
+            && let Some(insight) = crate::insight::explain(&self.tree, id)
+        {
+            return Some((id, insight, true));
+        }
+        let listed = self.listed();
+        crate::insight::explain(&self.tree, listed).map(|insight| (listed, insight, false))
+    }
+
     pub fn set_focus(&mut self, id: NodeId) {
         if self.tree.node(id).kind != NodeKind::Dir || id == self.focus {
             return;
         }
+        self.pinned = None;
         self.group_focus = None;
         if self.mode == ChartMode::Types {
             // The type chart is rebuilt for the new folder and sweeps in again
@@ -1310,6 +1346,9 @@ impl Explorer {
         if self.zoom.as_ref().is_some_and(|z| z.finished()) {
             self.zoom = None;
         }
+        if self.notice.as_ref().is_some_and(|n| n.shown.elapsed() >= NOTICE_DURATION) {
+            self.notice = None;
+        }
         let shelf_moving = self.tick_shelf();
         let trash_moving = self.tick_trash();
         self.zoom.is_some()
@@ -1347,6 +1386,17 @@ impl Explorer {
     /// Adds an item to the tray, keeping the set free of nested duplicates
     pub fn collect(&mut self, id: NodeId) {
         if self.tree.node(id).kind == NodeKind::Hidden || id == Tree::ROOT {
+            return;
+        }
+        if crate::insight::protected(&self.tree, id) {
+            let system = if cfg!(windows) { "Windows" } else { "macOS" };
+            let name = self.tree.node(id).name;
+            self.notice = Some(Notice {
+                text: format!("{system} needs \u{201c}{name}\u{201d}, so it stays out of the Collector").into(),
+                tone: Tone::Info,
+                shown: Instant::now(),
+            });
+            self.pinned = Some(id);
             return;
         }
         if self.collected.iter().any(|c| self.tree.is_ancestor(*c, id)) {

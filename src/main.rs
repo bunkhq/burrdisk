@@ -6,6 +6,7 @@ mod appicon;
 mod assets;
 mod filetype;
 mod format;
+mod insight;
 mod platform;
 mod scan;
 mod search;
