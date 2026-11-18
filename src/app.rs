@@ -294,7 +294,25 @@ pub struct Notice {
     pub text: SharedString,
     pub tone: Tone,
     pub shown: Instant,
+    /// What a move to the Trash moved, which the notice offers to put back
+    pub put_back: Option<PutBack>,
 }
+
+impl Notice {
+    /// How long it stays up: longer when it offers to put things back
+    pub fn lasts(&self) -> Duration {
+        if self.put_back.is_some() { PUT_BACK_DURATION } else { NOTICE_DURATION }
+    }
+}
+
+#[derive(Clone)]
+pub struct PutBack {
+    pub paths: Arc<Vec<PathBuf>>,
+    /// When the move began, in seconds since 1970
+    pub since: i64,
+}
+
+pub const PUT_BACK_DURATION: Duration = Duration::from_secs(12);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
@@ -361,6 +379,9 @@ pub struct Burrdisk {
     pub access_since: Instant,
     pub updater: Updater,
     _refresh: Option<Task<()>>,
+    /// Bytes and items in the Trash, when it could be read
+    pub trash: Option<(u64, u64)>,
+    _trash: Option<Task<()>>,
     _activation: Option<Subscription>,
 }
 
@@ -398,6 +419,8 @@ impl Burrdisk {
                 _job: None,
             },
             _refresh: None,
+            trash: None,
+            _trash: None,
             _activation: None,
         };
         // Coming back from System Settings is the moment access may have changed
@@ -405,6 +428,7 @@ impl Burrdisk {
             if window.is_window_active() {
                 // Space may have changed while Burrdisk was in the background
                 this.refresh_volumes(cx);
+                this.refresh_trash(cx);
                 let granted = volumes::has_full_disk_access();
                 if granted != this.full_disk_access {
                     this.full_disk_access = granted;
@@ -413,6 +437,7 @@ impl Burrdisk {
             }
         }));
         this.refresh_volumes(cx);
+        this.refresh_trash(cx);
         // Disks come and go, and fill up, while Burrdisk is open
         cx.spawn(async move |this, cx| {
             loop {
@@ -837,6 +862,7 @@ impl Burrdisk {
         }
         self.home_since = Instant::now();
         self.refresh_volumes(cx);
+        self.refresh_trash(cx);
         self.prompt_update();
         cx.notify();
     }
@@ -1335,6 +1361,7 @@ impl Burrdisk {
         }
         explorer.trashing = true;
         explorer.countdown = None;
+        let since = crate::format::unix_now() as i64;
         let items: Vec<(NodeId, PathBuf)> = explorer
             .collected
             .iter()
@@ -1367,10 +1394,12 @@ impl Burrdisk {
                 let mut freed = 0;
                 let mut failed = Vec::new();
                 let mut reason = None;
+                let mut moved = Vec::new();
                 for (id, result) in results {
                     match result {
                         Ok(()) => {
                             freed += explorer.tree.node(id).size;
+                            moved.push(explorer.tree.path(id));
                             explorer.collected.retain(|c| *c != id);
                             explorer.tree.remove(id);
                         }
@@ -1405,9 +1434,15 @@ impl Burrdisk {
                 cx.notify();
                 // The result shows once the list of what moved has closed
                 let error = !failed.is_empty();
+                let put_back = (crate::bin_trash::CAN_PUT_BACK && !moved.is_empty())
+                    .then(|| PutBack { paths: Arc::new(moved), since });
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(TRASH_LINGER).await;
-                    this.update(cx, |this, cx| this.show_notice(text, error, cx)).ok();
+                    this.update(cx, |this, cx| {
+                        this.show_notice_with(text, error, put_back, cx);
+                        this.refresh_trash(cx);
+                    })
+                    .ok();
                 })
                 .detach();
             })
@@ -1418,11 +1453,17 @@ impl Burrdisk {
     }
 
     pub fn show_notice(&mut self, text: String, error: bool, cx: &mut Context<Self>) {
+        self.show_notice_with(text, error, None, cx);
+    }
+
+    fn show_notice_with(&mut self, text: String, error: bool, put_back: Option<PutBack>, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer() else { return };
         let shown = Instant::now();
-        explorer.notice = Some(Notice { text: text.into(), tone: if error { Tone::Failed } else { Tone::Done }, shown });
+        let notice = Notice { text: text.into(), tone: if error { Tone::Failed } else { Tone::Done }, shown, put_back };
+        let lasts = notice.lasts();
+        explorer.notice = Some(notice);
         cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(NOTICE_DURATION).await;
+            cx.background_executor().timer(lasts).await;
             this.update(cx, |this, cx| {
                 if let Some(explorer) = this.explorer()
                     && explorer.notice.as_ref().is_some_and(|n| n.shown == shown)
@@ -1434,6 +1475,46 @@ impl Burrdisk {
             .ok();
         })
         .detach();
+    }
+
+    /// Puts back what the last move to the Trash moved. The live view brings the items
+    /// back into the chart as they reappear
+    pub fn put_back(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        let Some(put_back) = explorer.notice.take().and_then(|n| n.put_back) else { return };
+        let job = cx
+            .background_executor()
+            .spawn(async move { crate::bin_trash::put_back(&put_back.paths, put_back.since) });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| {
+                let text = match &result {
+                    Ok(1) => "Put back 1 item".to_string(),
+                    Ok(n) => format!("Put back {n} items"),
+                    Err(reason) => format!("Couldn\u{2019}t put them back: {reason}"),
+                };
+                this.show_notice(text, result.is_err(), cx);
+                this.refresh_trash(cx);
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Reads how much the Trash holds, for home
+    pub fn refresh_trash(&mut self, cx: &mut Context<Self>) {
+        let job = cx.background_executor().spawn(async { crate::bin_trash::size() });
+        self._trash = Some(cx.spawn(async move |this, cx| {
+            let size = job.await;
+            this.update(cx, |this, cx| {
+                if this.trash != size {
+                    this.trash = size;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
     }
 
     /// Starts the grace period before the collected items move to the Trash
@@ -1793,7 +1874,7 @@ impl Explorer {
         if self.zoom.as_ref().is_some_and(|z| z.finished()) {
             self.zoom = None;
         }
-        if self.notice.as_ref().is_some_and(|n| n.shown.elapsed() >= NOTICE_DURATION) {
+        if self.notice.as_ref().is_some_and(|n| n.shown.elapsed() >= n.lasts()) {
             self.notice = None;
         }
         let shelf_moving = self.tick_shelf();
@@ -1842,6 +1923,7 @@ impl Explorer {
                 text: format!("{system} needs \u{201c}{name}\u{201d}, so it stays out of the Collector").into(),
                 tone: Tone::Info,
                 shown: Instant::now(),
+                put_back: None,
             });
             self.pinned = Some(id);
             return;

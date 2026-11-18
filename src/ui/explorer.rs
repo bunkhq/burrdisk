@@ -12,7 +12,7 @@ use crate::ui::px;
 
 use crate::appicon;
 use crate::app::{
-    self, Burrdisk, ChartDrag, ChartMode, DragItem, Explorer, Hover, NOTICE_DURATION, Notice, Screen, ShelfItem,
+    self, Burrdisk, ChartDrag, ChartMode, DragItem, Explorer, Hover, Notice, Screen, ShelfItem,
     TRASH_COUNTDOWN, Tone,
 };
 use crate::insight::{self, Action, Insight, Verdict};
@@ -118,7 +118,7 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         )
         .child(tray(explorer, cx))
         .children(manifest(explorer, cx))
-        .children(explorer.notice.clone().map(toast))
+        .children(explorer.notice.clone().map(|n| toast(n, cx)))
         .children(item_menu(explorer, window, cx))
         .into_any_element()
 }
@@ -183,13 +183,14 @@ fn item_menu(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -
 }
 
 /// A pill floating above the tray with the result of the last Trash operation
-fn toast(notice: Notice) -> AnyElement {
+fn toast(notice: Notice, cx: &mut Context<Burrdisk>) -> AnyElement {
     let (tone, glyph): (Hsla, Icon) = match notice.tone {
         Tone::Failed => (theme::danger().into(), Icon::X),
         Tone::Done => (gpui::hsla(0.40, 0.6, 0.55, 1.0), Icon::Trash),
         Tone::Info => (theme::text_muted().into(), Icon::Check),
     };
-    let left = NOTICE_DURATION.as_secs_f32() - notice.shown.elapsed().as_secs_f32();
+    let left = notice.lasts().as_secs_f32() - notice.shown.elapsed().as_secs_f32();
+    let put_back = notice.put_back.is_some();
     div()
         .absolute()
         .left_0()
@@ -221,7 +222,21 @@ fn toast(notice: Notice) -> AnyElement {
                         .bg(tone.opacity(0.2))
                         .child(icon(glyph, 13.0, tone)),
                 )
-                .child(div().text_sm().min_w_0().child(notice.text.clone())),
+                .child(div().text_sm().min_w_0().child(notice.text.clone()))
+                .when(put_back, |s| {
+                    s.pr_1p5().child(
+                        icon_label_button(
+                            "put-back",
+                            Icon::CornerUpLeft,
+                            "Put Back",
+                            ButtonStyle::Ghost,
+                            cx.listener(|this, _, _, cx| this.put_back(cx)),
+                        )
+                        .h(px(26.))
+                        .px(px(10.))
+                        .text_xs(),
+                    )
+                }),
         )
         .with_animation(
             ElementId::Name(format!("toast-{:?}", notice.shown).into()),
@@ -1980,6 +1995,7 @@ fn run_action(this: &mut Burrdisk, action: Action, cx: &mut Context<Burrdisk>) {
                     text: format!("Copied \u{201c}{command}\u{201d}").into(),
                     tone: Tone::Info,
                     shown: std::time::Instant::now(),
+                    put_back: None,
                 });
             }
         }

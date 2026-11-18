@@ -4,6 +4,7 @@
 mod app;
 mod appicon;
 mod assets;
+mod bin_trash;
 mod cli;
 mod cloud;
 mod dupes;

@@ -192,6 +192,10 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         body = body.child(rise(image_section(app, images, window, cx), "rise-images", 2));
     }
 
+    if let Some((bytes, items)) = app.trash.filter(|(bytes, _)| *bytes > 0) {
+        body = body.child(rise(trash_line(bytes, items, cx), "rise-trash", 3));
+    }
+
     div()
         .flex()
         .flex_col()
@@ -207,6 +211,44 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
                 .pb(px(56.))
                 .child(body),
         )
+}
+
+/// What the Trash holds. Moving things there frees nothing until it's emptied, which
+/// Burrdisk leaves to the person, so it says so and opens the Trash
+fn trash_line(bytes: u64, items: u64, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    let what = if items == 1 { "1 item".to_string() } else { format!("{} items", format::count(items)) };
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .child(icon(Icon::Trash, 16.0, theme::text_faint()))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_0p5()
+                .flex_1()
+                .min_w_0()
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::text())
+                        .child(format!("{} in the {} ({what})", format::bytes(bytes), platform::TRASH)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(theme::text_faint())
+                        .child(format!("It still takes space until you empty the {}", platform::TRASH)),
+                ),
+        )
+        .child(icon_label_button(
+            "open-trash",
+            Icon::ArrowUpRight,
+            format!("Open {}", platform::TRASH),
+            ButtonStyle::Secondary,
+            cx.listener(|_, _, _, _| crate::bin_trash::open()),
+        ))
 }
 
 fn heading(text: &'static str, count: Option<usize>) -> impl IntoElement {
