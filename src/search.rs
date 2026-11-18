@@ -176,6 +176,13 @@ impl Query {
             && !self.synced
     }
 
+    /// Whether nothing inside an item can match, as nothing inside is bigger or
+    /// changed more recently than the item itself
+    fn rules_out_inside(&self, node: crate::scan::Node, now: u32) -> bool {
+        self.min_size.is_some_and(|min| node.size < min)
+            || self.newer_than.is_some_and(|n| node.modified != 0 && now.saturating_sub(node.modified) > n)
+    }
+
     fn matches(&self, tree: &Tree, id: NodeId, now: u32, compared: Compared) -> bool {
         let node = tree.node(id);
         if node.kind == NodeKind::Hidden || (node.kind == NodeKind::Dir && self.files_only()) {
@@ -199,7 +206,7 @@ impl Query {
         if !self.words.iter().all(|w| contains_ci(node.name, w)) {
             return false;
         }
-        if self.dupes && !compared.dupes.is_some_and(|d| d.copies(tree, id).is_some()) {
+        if self.dupes && !compared.dupes.is_some_and(|d| d.has_copy(tree, id)) {
             return false;
         }
         if self.grown && !compared.growth.is_some_and(|g| g.grew(id).is_some()) {
@@ -270,17 +277,41 @@ pub fn run(tree: &Tree, root: NodeId, query: &Query, now: u32, compared: Compare
     let dupes = compared.dupes.filter(|_| query.dupes);
     let growth = compared.growth.filter(|_| query.grown);
     let waiting = (query.dupes && dupes.is_none()) || (query.grown && growth.is_none());
-    let mut matches = Vec::new();
-    let mut stack: Vec<NodeId> = if waiting { Vec::new() } else { tree.node(root).children.to_vec() };
     let skip = if query.suggests() { compared.ignored } else { &[] };
-    while let Some(id) = stack.pop() {
-        if skip.contains(&id) {
-            continue;
+    let mut matches = Vec::new();
+    if let Some(d) = dupes {
+        // Only files compared can match, which are far fewer than the scan's items
+        let inside =
+            |id: NodeId| id != root && tree.is_ancestor(root, id) && !skip.iter().any(|s| tree.is_ancestor(*s, id));
+        matches.extend(d.files().filter(|id| inside(*id) && query.matches(tree, *id, now, compared)));
+    } else if !waiting {
+        // Folders that hold a cloud folder, through which a search for synced files
+        // has to pass; everything else outside one is skipped whole
+        let mut toward_cloud = HashSet::new();
+        if query.synced {
+            for &cloud in compared.clouds {
+                let mut cursor = Some(cloud);
+                while let Some(id) = cursor.filter(|id| toward_cloud.insert(*id)) {
+                    cursor = tree.node(id).parent;
+                }
+            }
         }
-        if query.matches(tree, id, now, compared) {
-            matches.push(id);
-        } else {
-            stack.extend_from_slice(tree.node(id).children);
+        let in_cloud = |id: NodeId| compared.clouds.iter().any(|c| tree.is_ancestor(*c, id));
+        let mut stack: Vec<(NodeId, bool)> =
+            tree.node(root).children.iter().map(|c| (*c, query.synced && in_cloud(*c))).collect();
+        while let Some((id, cloud)) = stack.pop() {
+            if skip.contains(&id) {
+                continue;
+            }
+            let cloud = cloud || (query.synced && compared.clouds.contains(&id));
+            if query.synced && !cloud && !toward_cloud.contains(&id) {
+                continue;
+            }
+            if query.matches(tree, id, now, compared) {
+                matches.push(id);
+            } else if !query.rules_out_inside(tree.node(id), now) {
+                stack.extend(tree.node(id).children.iter().map(|c| (*c, cloud)));
+            }
         }
     }
     let size = |id: &NodeId| match growth {

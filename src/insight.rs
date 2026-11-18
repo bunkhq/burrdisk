@@ -386,9 +386,31 @@ pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
 /// Whether an item's name is one a rule ends with, so it may have a note. Much
 /// cheaper than [`explain`], for checking every item in a scan
 pub fn candidate(name: &str) -> bool {
-    RULES
-        .iter()
-        .any(|rule| rule.os.here() && rule.path.last().is_some_and(|last| name.eq_ignore_ascii_case(last)))
+    // The names rules end with here, and for each length a bit per first letter, which
+    // rules out nearly every name before any lookup
+    static NAMES: std::sync::OnceLock<(std::collections::HashSet<&str>, [u32; 64])> = std::sync::OnceLock::new();
+    let (names, firsts) = NAMES.get_or_init(|| {
+        let names: std::collections::HashSet<&str> =
+            RULES.iter().filter(|r| r.os.here()).filter_map(|r| r.path.last().copied()).collect();
+        let mut firsts = [0u32; 64];
+        for n in names.iter().filter(|n| n.len() < 64) {
+            firsts[n.len()] |= 1 << (n.as_bytes()[0] & 31);
+        }
+        (names, firsts)
+    });
+    // Lowercasing changes a name's length or first letter only outside ASCII
+    if !name.is_ascii() {
+        return names.contains(name.to_lowercase().as_str());
+    }
+    let Some(&first) = name.as_bytes().first() else { return false };
+    if name.len() >= 64 || firsts[name.len()] & 1 << (first.to_ascii_lowercase() & 31) == 0 {
+        return false;
+    }
+    let mut buf = [0; 64];
+    let lower = &mut buf[..name.len()];
+    lower.copy_from_slice(name.as_bytes());
+    lower.make_ascii_lowercase();
+    std::str::from_utf8(lower).is_ok_and(|lower| names.contains(lower))
 }
 
 /// Whether an item is a suggestion: safe to move to the Trash, and not part of a
