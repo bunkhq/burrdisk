@@ -19,6 +19,7 @@ use crate::filetype::{self, Breakdown, Category};
 use crate::format;
 use crate::platform;
 use crate::scan::{NodeId, NodeKind, Tree};
+use crate::search;
 use crate::sunburst::{self, Geometry, Hit, PaintState, Segment, Target, View};
 use crate::theme;
 use crate::ui::components::{
@@ -492,6 +493,19 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         })
         .collect();
     let (highlight, dim, center_hover) = hover_weights(explorer, &segments);
+    let results = explorer.results();
+    let presence = results.map(|results| {
+        let presence_of = |id: NodeId| results.presence(&explorer.tree, id, explorer.focus);
+        segments
+            .iter()
+            .map(|s| match s.target {
+                Target::Node(id) => presence_of(id),
+                // The rest of a folder belongs to the results when the folder does
+                Target::Smaller(parent) => presence_of(parent).floor(),
+                Target::Group(_) | Target::GroupRest(_) => 1.0,
+            })
+            .collect::<Vec<f32>>()
+    });
 
     // What the center disc describes: the hovered item, or the folder in focus
     let breakdown = explorer.breakdown.as_deref();
@@ -533,6 +547,11 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         (Some(Hover::Center), _) if explorer.focus != Tree::ROOT => {
             let parent = explorer.tree.node(explorer.focus).parent.unwrap_or(Tree::ROOT);
             (format!("Back to {}", explorer.tree.node(parent).name), figure(explorer, explorer.focus), String::new())
+        }
+        (None, None) if results.is_some() => {
+            let results = results.expect("results");
+            let place = format!("in {}", explorer.tree.node(explorer.focus).name);
+            (matches_label(results.matches.len()), format::bytes(results.total_size), place)
         }
         _ => {
             let node = explorer.tree.node(explorer.focus);
@@ -662,6 +681,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         highlight,
                         dim,
                         collected,
+                        presence,
                         center_hover,
                         center_tint: theme::accent().into(),
                         rings,
@@ -859,6 +879,38 @@ fn group_rest(explorer: &Explorer, breakdown: &Breakdown, g: u32) -> (u64, u64, 
     (rest.len() as u64, size, "file types".into())
 }
 
+fn matches_label(n: usize) -> String {
+    if n == 1 { "1 match".into() } else { format!("{} matches", format::count(n as u64)) }
+}
+
+/// Where a search result sits below the folder in focus: "Adobe › Common", or with
+/// the middle left out when it's deeper, "Adobe › … › Plugins"
+fn place(explorer: &Explorer, id: NodeId) -> String {
+    let lineage = explorer.tree.lineage(id);
+    let from = lineage.iter().position(|n| *n == explorer.focus).map_or(0, |at| at + 1);
+    let names: Vec<&str> = lineage[from.min(lineage.len() - 1)..lineage.len() - 1]
+        .iter()
+        .map(|n| explorer.tree.node(*n).name)
+        .collect();
+    match names.as_slice() {
+        [] => format!("In {}", explorer.tree.node(explorer.focus).name),
+        [one] => one.to_string(),
+        [first, second] => format!("{first} \u{203a} {second}"),
+        [first, .., last] => format!("{first} \u{203a} \u{2026} \u{203a} {last}"),
+    }
+}
+
+/// A result's color: its slice's when the chart draws it, else one that says what it
+/// is (its age in the age chart, its file type otherwise)
+fn result_color(explorer: &Explorer, id: NodeId) -> Hsla {
+    let node = explorer.tree.node(id);
+    let color = explorer.segment_color(id).unwrap_or_else(|| match explorer.mode {
+        ChartMode::Age => sunburst::age_color(node.kind, node.modified, format::unix_now(), 0),
+        _ => sunburst::type_color(filetype::category(node.name, node.kind), 1, 0.0),
+    });
+    if explorer.is_collected(id) { pending(color) } else { color }
+}
+
 /// One line of the sidebar list: a folder, file, file type or extension
 struct Row {
     key: (&'static str, usize),
@@ -875,6 +927,8 @@ struct Row {
     figure: String,
     /// Shown under the figure in place of the share, e.g. how long ago it changed
     note: Option<String>,
+    /// The folder it's in, shown under the name in place of the share bar
+    place: Option<String>,
     /// A real item, which can be opened, dragged and right-clicked
     node: Option<NodeId>,
     /// Clicking opens it in the chart
@@ -887,7 +941,7 @@ struct Row {
 const COMPACT_RATIO: f32 = 0.001;
 
 fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: bool, cx: &mut Context<Burrdisk>) -> AnyElement {
-    let Row { key, target, name, detail, glyph, app, color, ratio, figure, note, node, opens, collected, muted } = row;
+    let Row { key, target, name, detail, glyph, app, color, ratio, figure, note, place, node, opens, collected, muted } = row;
     let app = app.and_then(|ext| appicon::for_extension(&ext, cx));
     // A row stays lit while its right-click menu is open
     let is_hovered = explorer.hover == Some(Hover::Target(target))
@@ -1005,10 +1059,16 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
                     .flex_col()
                     .flex_1()
                     .min_w_0()
-                    .gap(px(6.))
+                    .gap(px(if place.is_some() { 2. } else { 6. }))
                     .child(name_el(14.0, FontWeight::MEDIUM))
-                    .child(
-                        div()
+                    .child(match place {
+                        Some(place) => div()
+                            .text_size(px(11.5))
+                            .text_color(theme::text_faint())
+                            .whitespace_nowrap()
+                            .truncate()
+                            .child(place),
+                        None => div()
                             .h(px(3.))
                             .w_full()
                             .rounded_full()
@@ -1020,7 +1080,7 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
                                     .bg(color.opacity(0.75 + 0.25 * t))
                                     .w(relative(ratio.clamp(0.015, 1.0))),
                             ),
-                    ),
+                    }),
             )
             .child(
                 div()
@@ -1083,6 +1143,7 @@ fn node_row(explorer: &Explorer, id: NodeId, whole: u64, color: Hsla) -> Row {
         note: (explorer.mode == ChartMode::Age)
             .then(|| format::ago(node.modified, format::unix_now()))
             .flatten(),
+        place: None,
         node: (node.kind != NodeKind::Hidden).then_some(id),
         opens: node.kind == NodeKind::Dir && !types,
         collected: explorer.is_collected(id),
@@ -1107,6 +1168,7 @@ fn group_row(breakdown: &Breakdown, g: u32, whole: u64, detail: bool) -> Row {
         ratio: group.size as f32 / whole.max(1) as f32,
         figure: format::bytes(group.size),
         note: None,
+        place: None,
         node: None,
         opens: true,
         collected: false,
@@ -1228,6 +1290,141 @@ fn type_listing(explorer: &Explorer, breakdown: &Breakdown) -> Listing {
     }
 }
 
+fn search_listing(explorer: &Explorer, results: &search::Results) -> Listing {
+    let focus = explorer.tree.node(explorer.focus);
+    let rows = results
+        .matches
+        .iter()
+        .take(MAX_ROWS)
+        .map(|&id| {
+            let mut row = node_row(explorer, id, results.total_size, result_color(explorer, id));
+            row.place = Some(place(explorer, id));
+            // Results list by size whatever the chart shows
+            row.figure = format::bytes(explorer.tree.node(id).size);
+            row.ratio = explorer.tree.node(id).size as f32 / results.total_size.max(1) as f32;
+            row.key = ("result", id as usize);
+            row
+        })
+        .collect();
+    Listing {
+        // One list for the whole search, so rows already shown stay put while typing
+        key: format!("{}-search", explorer.focus),
+        title: focus.name.to_string(),
+        title_color: theme::text_muted().into(),
+        title_icon: Icon::Search,
+        figure: format::bytes_parts(results.total_size),
+        aside: matches_label(results.matches.len()),
+        rows,
+        remaining: results.matches.len().saturating_sub(MAX_ROWS),
+        folder: None,
+    }
+}
+
+/// The field atop the sidebar. Click it, press ⌘F, or just start typing
+fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    let open = explorer.search.is_some();
+    let text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+    let t = fx::hover("search-field");
+    let folder = explorer.tree.node(explorer.focus).name.to_string();
+    let shortcut = if cfg!(target_os = "macos") { "\u{2318}F" } else { "Ctrl+F" };
+    let caret = div()
+        .flex_none()
+        .w(px(1.5))
+        .h(px(16.))
+        .rounded_full()
+        .bg(theme::accent())
+        .with_animation(
+            "search-caret",
+            Animation::new(Duration::from_millis(1060)).repeat(),
+            |el, t| el.opacity(if t < 0.55 { 1. } else { 0. }),
+        );
+    div()
+        .id("search-field")
+        .on_hover(fx::on_hover("search-field"))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_2()
+        .h(px(32.))
+        .mx_3()
+        .mt_3()
+        .pl_2p5()
+        .pr_1()
+        .rounded(px(9.))
+        .bg(if open { theme::bg().into() } else { fx::mix(gpui::rgba(0x14141680), theme::bg(), t) })
+        .when(!open, |s| s.cursor_text())
+        .on_click(cx.listener(|this, _, _, cx| {
+            if let Some(explorer) = this.explorer() {
+                explorer.open_search();
+                cx.notify();
+            }
+        }))
+        .child(icon(Icon::Search, 14.0, if open { theme::accent_hi() } else { theme::text_faint() }))
+        .child(
+            div()
+                .flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .text_size(px(13.5))
+                .overflow_hidden()
+                .when(!text.is_empty(), |s| s.child(div().flex_none().whitespace_nowrap().child(text.clone())))
+                .when(open, |s| s.child(caret))
+                .when(text.is_empty(), |s| {
+                    s.child(
+                        div()
+                            .ml(px(if open { 4. } else { 0. }))
+                            .min_w_0()
+                            .truncate()
+                            .whitespace_nowrap()
+                            .text_color(theme::text_faint())
+                            .child(format!("Search {folder}")),
+                    )
+                }),
+        )
+        .when(!open, |s| {
+            s.child(div().flex_none().pr_1p5().text_xs().text_color(fx::mix(theme::border_strong(), theme::text_faint(), t)).child(shortcut))
+        })
+        .when(open, |s| {
+            s.child(
+                icon_button(
+                    "close-search",
+                    Icon::X,
+                    cx.listener(|this, _, _, cx| {
+                        if let Some(explorer) = this.explorer() {
+                            explorer.close_search();
+                            cx.notify();
+                        }
+                    }),
+                )
+                .size(px(24.)),
+            )
+        })
+}
+
+/// Shown under the field while it's open and empty: what a query can say
+fn search_hint() -> impl IntoElement {
+    div()
+        .flex()
+        .flex_wrap()
+        .gap_x_2()
+        .gap_y_1()
+        .mx_3()
+        .mt_2()
+        .px_1()
+        .text_xs()
+        .text_color(theme::text_faint())
+        .child("Try")
+        .children(["node_modules", ".mov", ">1gb", ">1y"].into_iter().map(|example| {
+            div().px_1p5().rounded(px(6.)).bg(theme::track()).text_color(theme::text_muted()).child(example)
+        }))
+        .with_animation(
+            "search-hint",
+            Animation::new(Duration::from_millis(220)).with_easing(ease_out_quint()),
+            |el, t| el.opacity(t).mt(px(8. - 4. * (1. - t))),
+        )
+}
+
 /// The sidebar's left edge, which drags to resize it. A soft line shows on hover
 fn resize_edge() -> impl IntoElement {
     let t = fx::hover("sidebar-edge");
@@ -1250,10 +1447,15 @@ fn resize_edge() -> impl IntoElement {
 }
 
 fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Context<Burrdisk>) -> impl IntoElement {
-    let listing = match explorer.breakdown.as_deref() {
-        Some(breakdown) => type_listing(explorer, breakdown),
-        None => folder_listing(explorer),
+    let results = explorer.results();
+    let listing = match (results, explorer.breakdown.as_deref()) {
+        (Some(results), _) => search_listing(explorer, results),
+        (None, Some(breakdown)) => type_listing(explorer, breakdown),
+        (None, None) => folder_listing(explorer),
     };
+    let searching = explorer.search.is_some();
+    let no_matches = results.is_some_and(|r| r.matches.is_empty());
+    let collectable = results.map_or(0, |r| r.matches.iter().take(MAX_ROWS).filter(|id| !explorer.is_collected(**id)).count());
     let previewing = explorer.preview.is_some() || explorer.group_preview.is_some();
     let Listing { key: list_key, title, title_color, title_icon, figure: (focus_num, focus_unit), aside, rows, remaining, folder } =
         listing;
@@ -1319,13 +1521,15 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         .border_color(theme::border())
         .bg(theme::surface())
         .child(resize_edge())
+        .child(search_field(explorer, cx))
+        .when(searching && results.is_none(), |s| s.child(search_hint()))
         .child(
             div()
                 .flex()
                 .flex_col()
                 .gap_1()
                 .px_5()
-                .pt_5()
+                .pt_4()
                 .pb_3()
                 .child(
                     div()
@@ -1362,6 +1566,30 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                             s.child(
                                 icon_button("reveal-focus", Icon::ArrowUpRight, move |_, _, cx| cx.reveal_path(&path))
                                     .size(px(24.)),
+                            )
+                        })
+                        .when(collectable > 0, |s| {
+                            let label = if results.is_some_and(|r| r.matches.len() > MAX_ROWS) {
+                                format!("Collect top {MAX_ROWS}")
+                            } else {
+                                "Collect all".to_string()
+                            };
+                            s.child(
+                                icon_label_button(
+                                    "collect-matches",
+                                    Icon::Plus,
+                                    label,
+                                    ButtonStyle::Ghost,
+                                    cx.listener(|this, _, _, cx| {
+                                        if let Some(explorer) = this.explorer() {
+                                            explorer.collect_matches(MAX_ROWS);
+                                            cx.notify();
+                                        }
+                                    }),
+                                )
+                                .h(px(26.))
+                                .px(px(10.))
+                                .text_xs(),
                             )
                         }),
                 )
@@ -1401,6 +1629,23 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                 .min_h_0()
                 .overflow_y_scroll()
                 .pb_2()
+                .when(no_matches, |s| {
+                    s.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .px_5()
+                            .py_3()
+                            .child(div().text_sm().text_color(theme::text_muted()).child("Nothing here matches"))
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme::text_faint())
+                                    .child("Try fewer words, or search again from a folder further up"),
+                            ),
+                    )
+                })
                 .children(rows)
                 .when(remaining > 0, |s| {
                     s.child(

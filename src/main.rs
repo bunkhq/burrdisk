@@ -8,6 +8,7 @@ mod filetype;
 mod format;
 mod platform;
 mod scan;
+mod search;
 mod sunburst;
 mod theme;
 mod ui;
@@ -20,7 +21,7 @@ use gpui::{
 };
 use ui::px;
 
-use app::{Burrdisk, CheckForUpdates, Collect, GoBack, GoForward, GoUp, Preview, Quit};
+use app::{Burrdisk, CheckForUpdates, ClearSearch, Collect, FindItems, GoBack, GoForward, GoUp, Preview, Quit};
 
 fn main() -> std::process::ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
@@ -30,13 +31,16 @@ fn main() -> std::process::ExitCode {
     Application::new()
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
+            // While a search is open, Escape closes it and Backspace edits it
             cx.bind_keys([
-                KeyBinding::new("escape", GoUp, None),
+                KeyBinding::new("escape", GoUp, Some("!searching")),
+                KeyBinding::new("escape", ClearSearch, Some("searching")),
+                KeyBinding::new("secondary-f", FindItems, None),
                 KeyBinding::new("secondary-[", GoBack, None),
                 KeyBinding::new("secondary-]", GoForward, None),
                 KeyBinding::new("secondary-backspace", Collect, None),
                 KeyBinding::new("secondary-up", GoUp, None),
-                KeyBinding::new("backspace", GoUp, None),
+                KeyBinding::new("backspace", GoUp, Some("!searching")),
                 KeyBinding::new("cmd-q", Quit, None),
                 KeyBinding::new("alt-left", GoBack, None),
                 KeyBinding::new("alt-right", GoForward, None),
@@ -44,7 +48,7 @@ fn main() -> std::process::ExitCode {
             // Quick Look is macOS only. Opening the hovered item instead would make
             // Space launch programs on Windows
             if cfg!(not(windows)) {
-                cx.bind_keys([KeyBinding::new("space", Preview, None)]);
+                cx.bind_keys([KeyBinding::new("space", Preview, Some("!searching"))]);
             }
             cx.on_action(|_: &Quit, cx| cx.quit());
             let mut items = Vec::new();

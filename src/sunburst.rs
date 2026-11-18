@@ -552,6 +552,9 @@ pub struct PaintState {
     pub dim: f32,
     /// Segments already collected for deletion are drawn faded out
     pub collected: Vec<bool>,
+    /// While searching, per segment 0..1: how much it belongs to the results. The rest
+    /// fades back so the matches stand out
+    pub presence: Option<Vec<f32>>,
     /// 0..1 hover glow on the center disc
     pub center_hover: f32,
     pub center_tint: Hsla,
@@ -601,6 +604,11 @@ pub fn paint(segments: &[Segment], bounds: Bounds<Pixels>, state: &PaintState, w
             }
             let mut alpha = fade * (0.35 + 0.65 * local);
             alpha *= 1.0 - 0.5 * state.dim * (1.0 - highlight);
+            if let Some(presence) = &state.presence {
+                let p = presence.get(ix).copied().unwrap_or(0.0).max(highlight);
+                alpha *= 0.14 + 0.86 * p;
+                color.s *= 0.25 + 0.75 * p;
+            }
             if state.collected.get(ix).copied().unwrap_or(false) {
                 // Collected items drain to gray, so the chart shows what's leaving
                 color.s *= 0.12;

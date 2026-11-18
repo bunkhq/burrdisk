@@ -18,7 +18,7 @@ use crate::theme;
 use crate::update::{self, Release};
 use crate::volumes::{self, Volume};
 
-actions!(burrdisk, [GoUp, GoBack, GoForward, Preview, Collect, Quit, CheckForUpdates]);
+actions!(burrdisk, [GoUp, GoBack, GoForward, Preview, Collect, Quit, CheckForUpdates, FindItems, ClearSearch]);
 
 #[derive(Clone)]
 pub struct ScanTarget {
@@ -156,6 +156,16 @@ pub struct Explorer {
     pub group_preview: Option<u32>,
     /// Type or extension the type chart is opened into, like a folder
     pub group_focus: Option<u32>,
+    /// The search field, while it's open
+    pub search: Option<Search>,
+}
+
+/// A search through the folder in focus
+#[derive(Default)]
+pub struct Search {
+    pub text: String,
+    /// What the text found; `None` while it holds no query
+    pub results: Option<Rc<crate::search::Results>>,
 }
 
 /// One item in a move to the Trash, as it was when the move began
@@ -564,6 +574,7 @@ impl Burrdisk {
             breakdown: None,
             group_preview: None,
             group_focus: None,
+            search: None,
         });
         let mode = self.chart_mode;
         if let Some(explorer) = self.explorer() {
@@ -868,6 +879,70 @@ impl Burrdisk {
         }
     }
 
+    fn on_find(&mut self, _: &FindItems, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer() {
+            explorer.open_search();
+            cx.notify();
+        }
+    }
+
+    /// Escape while searching: closes an open menu or stops a countdown first, as it
+    /// always does, and otherwise closes the search
+    fn on_clear_search(&mut self, _: &ClearSearch, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(explorer) = self.explorer() {
+            if explorer.context.is_some() {
+                explorer.context = None;
+            } else if explorer.countdown.is_some() {
+                explorer.countdown = None;
+            } else {
+                explorer.close_search();
+            }
+            cx.notify();
+        }
+    }
+
+    /// Typing in the explorer goes to the search field, opening it on the first key
+    fn on_key(&mut self, event: &gpui::KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        let keystroke = &event.keystroke;
+        let m = keystroke.modifiers;
+        let searching = explorer.search.is_some();
+        if searching && m.secondary() && keystroke.key == "v" {
+            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+                let line = text.lines().next().unwrap_or_default().to_string();
+                let explorer = self.explorer().expect("explorer");
+                let joined = format!("{}{line}", explorer.search.as_ref().map_or("", |s| s.text.as_str()));
+                explorer.set_search_text(joined);
+                cx.notify();
+            }
+            return;
+        }
+        if searching && keystroke.key == "backspace" && !m.secondary() {
+            let mut text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+            text.pop();
+            explorer.set_search_text(text);
+            cx.notify();
+            return;
+        }
+        // Ctrl with Alt is AltGr on Windows, which types characters
+        if m.platform || m.function || m.control != m.alt {
+            return;
+        }
+        // Windows reports Space by name only, with no character
+        let space = (keystroke.key == "space").then_some(" ");
+        let Some(typed) = keystroke.key_char.as_deref().or(space).filter(|c| !c.chars().any(char::is_control)) else {
+            return;
+        };
+        // A space starts nothing, so Space keeps previewing; other keys start a search
+        let starts = typed.chars().next().is_some_and(|c| c.is_alphanumeric() || ".*<>_-~".contains(c));
+        if !searching && !starts {
+            return;
+        }
+        let text = format!("{}{typed}", explorer.search.as_ref().map_or("", |s| s.text.as_str()));
+        explorer.set_search_text(text);
+        cx.notify();
+    }
+
     fn on_collect(&mut self, _: &Collect, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.keyboard_target()
             && let Some(explorer) = self.explorer()
@@ -1057,6 +1132,43 @@ impl Explorer {
         }
     }
 
+    /// Opens the search field, empty, without searching yet
+    pub fn open_search(&mut self) {
+        if self.search.is_none() {
+            self.search = Some(Search::default());
+        }
+    }
+
+    pub fn close_search(&mut self) {
+        self.search = None;
+    }
+
+    pub fn set_search_text(&mut self, text: String) {
+        self.search.get_or_insert_with(Search::default).text = text;
+        self.run_search();
+    }
+
+    /// Runs the search again, after its text, the folder in focus or the tree changed
+    fn run_search(&mut self) {
+        let Some(search) = &mut self.search else { return };
+        let query = crate::search::Query::parse(&search.text);
+        search.results = (!query.is_empty())
+            .then(|| Rc::new(crate::search::run(&self.tree, self.focus, &query, crate::format::unix_now())));
+    }
+
+    /// Search results, while a search has any query
+    pub fn results(&self) -> Option<&crate::search::Results> {
+        self.search.as_ref()?.results.as_deref()
+    }
+
+    /// Adds the biggest matches to the Collector, as many as the list shows
+    pub fn collect_matches(&mut self, limit: usize) {
+        let Some(results) = self.search.as_ref().and_then(|s| s.results.clone()) else { return };
+        for &id in results.matches.iter().take(limit) {
+            self.collect(id);
+        }
+    }
+
     pub fn palette(&self) -> Palette {
         match self.mode {
             ChartMode::Age => Palette::Age { now: crate::format::unix_now() },
@@ -1229,6 +1341,7 @@ impl Explorer {
             self.group_focus = None;
             self.segments = Rc::new(sunburst::layout(&self.tree, self.focus, self.measure(), self.palette()));
         }
+        self.run_search();
     }
 
     /// Adds an item to the tray, keeping the set free of nested duplicates
@@ -1491,15 +1604,19 @@ impl Render for Burrdisk {
         if crate::ui::fx::animating() {
             window.request_animation_frame();
         }
+        let searching = matches!(&self.screen, Screen::Explorer(e) if e.search.is_some());
         div()
             .id("root")
-            .key_context("Burrdisk")
+            .key_context(if searching { "Burrdisk searching" } else { "Burrdisk" })
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(Self::go_up))
             .on_action(cx.listener(Self::on_back))
             .on_action(cx.listener(Self::on_forward))
             .on_action(cx.listener(Self::on_preview))
             .on_action(cx.listener(Self::on_collect))
+            .on_action(cx.listener(Self::on_find))
+            .on_action(cx.listener(Self::on_clear_search))
+            .on_key_down(cx.listener(Self::on_key))
             .on_action(cx.listener(|this, _: &CheckForUpdates, _, cx| this.check_for_updates(cx)))
             // The mouse's side buttons (and two-finger swipes) step back and forward
             .on_mouse_down(

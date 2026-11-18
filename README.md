@@ -61,7 +61,8 @@ It is a native app written in Rust with [GPUI](https://gpui.rs), the GPU-acceler
 
 1. **Pick a disk.** Home lists your disks, with the startup disk first and other drives below. Before a scan, each burr's spines show how full the disk is. The menu beside each Scan button can rescan (also as administrator), forget a scan, show the disk in Finder (File Explorer on Windows), or open Get Info (Properties). You can also scan any folder.
 2. **Explore.** The scan shows live progress. The explorer then draws the disk as a sunburst. Each ring is one level deeper in the folder tree, and each slice is sized by the space it takes. You can size the chart by space or by file count, group it by file type, or color it by age to see what nobody has touched in months or years. The sidebar lists everything in the current folder, largest first.
-3. **Collect, then clean.** Drag files and folders from the chart or the list into the Collector at the bottom, or right-click one and pick **Move to Collector**. When the pile looks right, **Move to Trash** starts a 5-second countdown. **Stop** or `Esc` cancels it.
+3. **Find things.** Start typing anywhere in the explorer, or press `⌘F` (`Ctrl+F`), to search the folder you're in. Words match names, `.mp4` or `*.dmg` match extensions, `>500mb` matches files over a size, and `>1y`, `>6mo` or `<2w` match by when things last changed. Combine them: `.mov >1gb >1y` finds big videos nobody has touched in a year. The chart lights up what matches, and **Collect all** puts every result in the Collector.
+4. **Collect, then clean.** Drag files and folders from the chart or the list into the Collector at the bottom, or right-click one and pick **Move to Collector**. When the pile looks right, **Move to Trash** starts a 5-second countdown. **Stop** or `Esc` cancels it.
 
 ### What the numbers mean
 
@@ -96,6 +97,7 @@ Burrdisk has no accounts, analytics or telemetry. Scan results stay on your comp
 | `⌘[`, `⌘]` | `Ctrl+[`, `Ctrl+]`, `Alt+←`, `Alt+→` | Back up to the parent folder (or the disk list), and forward down the path you came back from |
 | `Esc`, `⌫`, `⌘↑` | `Esc`, `Backspace`, `Ctrl+↑` | Go up a folder (or back to the disk list); stops a Trash countdown |
 | `Space` | | Quick Look the hovered item (macOS only) |
+| `⌘F`, or just type | `Ctrl+F`, or just type | Search the folder you're in; `Esc` closes the search |
 | `⌘⌫` | `Ctrl+Backspace` | Move the hovered item to the Collector |
 | `⌘Q` | `Alt+F4` | Quit |
 

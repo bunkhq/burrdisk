@@ -44,6 +44,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "plus",
     "refresh",
     "scan",
+    "search",
     "shield-alert",
     "shield-check",
     "trash",
