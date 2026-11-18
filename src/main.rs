@@ -4,6 +4,7 @@
 mod app;
 mod appicon;
 mod assets;
+mod dupes;
 mod filetype;
 mod format;
 mod insight;

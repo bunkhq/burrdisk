@@ -166,6 +166,27 @@ pub struct Explorer {
     /// The sidebar's rows in order, as last drawn, for moving through them by keyboard
     pub rows: Rc<std::cell::RefCell<Vec<Target>>>,
     pub rows_scroll: gpui::ScrollHandle,
+    /// Copies found by comparing contents, once a search first asks for them
+    pub dupes: Option<Dupes>,
+}
+
+/// Comparing file contents for the `is:dup` search, which starts the first time a
+/// search asks for duplicates and covers the whole scan
+pub enum Dupes {
+    Wanted,
+    Comparing {
+        progress: Arc<crate::dupes::Progress>,
+        _task: Task<()>,
+    },
+    Found(Rc<crate::dupes::Dupes>),
+}
+
+impl Drop for Dupes {
+    fn drop(&mut self) {
+        if let Dupes::Comparing { progress, .. } = self {
+            progress.cancelled.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 /// A search through the folder in focus
@@ -611,6 +632,7 @@ impl Burrdisk {
             pinned: None,
             rows: Rc::default(),
             rows_scroll: gpui::ScrollHandle::new(),
+            dupes: None,
         });
         let mode = self.chart_mode;
         if let Some(explorer) = self.explorer() {
@@ -955,9 +977,9 @@ impl Burrdisk {
         }
         if searching && keystroke.key == "backspace" && !m.secondary() {
             let mut text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
-            // The suggestions chip goes in one press, as it reads as one thing
-            if text.ends_with(crate::search::SAFE) {
-                text.truncate(text.len() - crate::search::SAFE.len());
+            // A chip goes in one press, as it reads as one thing
+            if let Some(chip) = crate::search::CHIPS.iter().find(|c| text.ends_with(**c)) {
+                text.truncate(text.len() - chip.len());
             } else {
                 text.pop();
             }
@@ -980,8 +1002,8 @@ impl Burrdisk {
             return;
         }
         let mut text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
-        // Words typed after the suggestions chip are words of their own
-        if text.ends_with(crate::search::SAFE) && typed != " " {
+        // Words typed after a chip are words of their own
+        if crate::search::CHIPS.iter().any(|c| text.ends_with(c)) && typed != " " {
             text.push(' ');
         }
         text.push_str(typed);
@@ -1021,6 +1043,45 @@ impl Burrdisk {
             explorer.collect(id);
             explorer.context = None;
             cx.notify();
+        }
+    }
+
+    /// Compares the contents of the scan's files in the background, for `is:dup`
+    fn compare_files(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        let candidates = crate::dupes::candidates(&explorer.tree);
+        let progress = Arc::new(crate::dupes::Progress::default());
+        let job = {
+            let progress = progress.clone();
+            cx.background_executor().spawn(async move { crate::dupes::find(candidates, &progress) })
+        };
+        // The task ends with the explorer, which drops it
+        let task = cx.spawn(async move |this, cx| {
+            let mut job = std::pin::pin!(job);
+            loop {
+                let tick = cx.background_executor().timer(Duration::from_millis(120));
+                match futures_select(&mut job, tick).await {
+                    Some(found) => {
+                        this.update(cx, |this, cx| {
+                            if let (Some(found), Some(explorer)) = (found, this.explorer()) {
+                                explorer.dupes = Some(Dupes::Found(Rc::new(found)));
+                                explorer.run_search();
+                            }
+                            cx.notify();
+                        })
+                        .ok();
+                        return;
+                    }
+                    None => {
+                        if this.update(cx, |_, cx| cx.notify()).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+        if let Some(explorer) = self.explorer() {
+            explorer.dupes = Some(Dupes::Comparing { progress, _task: task });
         }
     }
 
@@ -1243,8 +1304,15 @@ impl Explorer {
     fn run_search(&mut self) {
         let Some(search) = &mut self.search else { return };
         let query = crate::search::Query::parse(&search.text);
+        if query.dupes && self.dupes.is_none() {
+            self.dupes = Some(Dupes::Wanted);
+        }
+        let found = match &self.dupes {
+            Some(Dupes::Found(found)) => Some(found),
+            _ => None,
+        };
         search.results = (!query.is_empty())
-            .then(|| Rc::new(crate::search::run(&self.tree, self.focus, &query, crate::format::unix_now())));
+            .then(|| Rc::new(crate::search::run(&self.tree, self.focus, &query, crate::format::unix_now(), found)));
     }
 
     /// Search results, while a search has any query
@@ -1252,11 +1320,36 @@ impl Explorer {
         self.search.as_ref()?.results.as_deref()
     }
 
-    /// Adds the biggest matches to the Collector, as many as the list shows
+    /// Adds the biggest matches to the Collector, as many as the list shows. Of
+    /// duplicates it always leaves one copy, the likely original
     pub fn collect_matches(&mut self, limit: usize) {
         let Some(results) = self.search.as_ref().and_then(|s| s.results.clone()) else { return };
-        for &id in results.matches.iter().take(limit) {
-            self.collect(id);
+        let shown = &results.matches[..results.matches.len().min(limit)];
+        match &results.dupes {
+            None => shown.iter().for_each(|id| self.collect(*id)),
+            Some(dupes) => {
+                // Later copies first, so the one left is the first
+                for &id in shown.iter().rev() {
+                    let others_kept = dupes
+                        .copies(&self.tree, id)
+                        .is_some_and(|copies| copies.iter().any(|c| *c != id && !self.is_collected(*c)));
+                    if others_kept {
+                        self.collect(id);
+                    }
+                }
+            }
+        }
+    }
+
+    /// While the `is:dup` search compares contents: bytes read and to read, the
+    /// second 0 until the first pass is done
+    pub fn comparing(&self) -> Option<(u64, u64)> {
+        match &self.dupes {
+            Some(Dupes::Comparing { progress, .. }) => {
+                Some((progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed)))
+            }
+            Some(Dupes::Wanted) => Some((0, 0)),
+            _ => None,
         }
     }
 
@@ -1731,6 +1824,9 @@ impl Render for Burrdisk {
         };
         if crate::ui::fx::animating() {
             window.request_animation_frame();
+        }
+        if matches!(&self.screen, Screen::Explorer(e) if matches!(e.dupes, Some(Dupes::Wanted))) {
+            self.compare_files(cx);
         }
         let searching = matches!(&self.screen, Screen::Explorer(e) if e.search.is_some());
         div()

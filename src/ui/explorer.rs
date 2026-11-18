@@ -1321,9 +1321,20 @@ fn search_listing(explorer: &Explorer, results: &search::Results) -> Listing {
             row.figure = format::bytes(explorer.tree.node(id).size);
             row.ratio = explorer.tree.node(id).size as f32 / results.total_size.max(1) as f32;
             row.key = ("result", id as usize);
+            if let Some(copies) = results.dupes.as_ref().and_then(|d| d.copies(&explorer.tree, id)) {
+                row.note = Some(format!("{} copies", copies.len()));
+            }
             row
         })
         .collect();
+    let aside = match &results.dupes {
+        Some(dupes) => {
+            let files = results.matches.iter().map(|id| dupes.order(*id).0).collect::<std::collections::HashSet<_>>().len();
+            let of = if files == 1 { "1 file".to_string() } else { format!("{} files", format::count(files as u64)) };
+            format!("{} copies of {of}", format::count(results.matches.len() as u64))
+        }
+        None => matches_label(results.matches.len()),
+    };
     Listing {
         // One list for the whole search, so rows already shown stay put while typing
         key: format!("{}-search", explorer.focus),
@@ -1331,7 +1342,7 @@ fn search_listing(explorer: &Explorer, results: &search::Results) -> Listing {
         title_color: theme::text_muted().into(),
         title_icon: Icon::Search,
         figure: format::bytes_parts(results.total_size),
-        aside: matches_label(results.matches.len()),
+        aside,
         rows,
         remaining: results.matches.len().saturating_sub(MAX_ROWS),
         folder: None,
@@ -1344,10 +1355,10 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
     let text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
     let t = fx::hover("search-field");
     let folder = explorer.tree.node(explorer.focus).name.to_string();
-    // The suggestions query reads as a chip, not as its syntax
-    let (safe, text) = match text.strip_prefix(search::SAFE) {
-        Some(rest) => (true, rest.to_string()),
-        None => (false, text),
+    // A leading chip query reads as a chip, not as its syntax
+    let (chip, text) = match search::CHIPS.iter().find_map(|c| Some((*c, text.strip_prefix(c)?))) {
+        Some((chip, rest)) => (Some(chip), rest.to_string()),
+        None => (None, text),
     };
     let caret = div()
         .flex_none()
@@ -1390,10 +1401,10 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
                 .items_center()
                 .text_size(px(13.5))
                 .overflow_hidden()
-                .when(safe, |s| s.child(safe_chip().mr(px(2.))))
+                .when_some(chip, |s, chip| s.child(query_chip(chip).mr(px(2.))))
                 .when(!text.is_empty(), |s| s.child(div().flex_none().whitespace_nowrap().child(text.clone())))
                 .when(open, |s| s.child(caret))
-                .when(text.is_empty() && !safe, |s| {
+                .when(text.is_empty() && chip.is_none(), |s| {
                     s.child(
                         div()
                             .ml(px(if open { 4. } else { 0. }))
@@ -1423,8 +1434,9 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
         })
 }
 
-/// "Safe to clear", as the field shows the suggestions query
-fn safe_chip() -> gpui::Div {
+/// A chip query as the field shows it: "Safe to clear" or "Duplicates"
+fn query_chip(query: &str) -> gpui::Div {
+    let (glyph, label) = if query == search::DUPES { (Icon::Copy, "Duplicates") } else { (Icon::Check, "Safe to clear") };
     div()
         .flex()
         .flex_none()
@@ -1437,8 +1449,8 @@ fn safe_chip() -> gpui::Div {
         .text_xs()
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme::accent_hi())
-        .child(icon(Icon::Check, 12.0, theme::accent_hi()))
-        .child("Safe to clear")
+        .child(icon(glyph, 12.0, theme::accent_hi()))
+        .child(label)
 }
 
 /// The way into suggestions, in the field's right end while it's closed
@@ -1487,7 +1499,11 @@ fn search_hint(cx: &mut Context<Burrdisk>) -> impl IntoElement {
         .text_xs()
         .text_color(theme::text_faint())
         .child("Try")
-        .children(["node_modules", ".mov", ">1gb", ">1y"].into_iter().enumerate().map(|(ix, example)| {
+        .children(
+            [("node_modules", "node_modules"), (".mov", ".mov"), (">1gb", ">1gb"), (">1y", ">1y"), ("duplicates", search::DUPES)]
+                .into_iter()
+                .enumerate()
+                .map(|(ix, (label, example))| {
             let key = ("example", ix);
             let t = fx::hover(key);
             div()
@@ -1504,7 +1520,7 @@ fn search_hint(cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         cx.notify();
                     }
                 }))
-                .child(example)
+                .child(label)
         }))
         .with_animation(
             "search-hint",
@@ -1542,8 +1558,26 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         (None, None) => folder_listing(explorer),
     };
     let searching = explorer.search.is_some();
-    let no_matches = results.is_some_and(|r| r.matches.is_empty());
-    let collectable = results.map_or(0, |r| r.matches.iter().take(MAX_ROWS).filter(|id| !explorer.is_collected(**id)).count());
+    // While a search for duplicates waits on the comparison, it says how far that got
+    let comparing = results.is_some_and(|r| r.matches.is_empty()).then(|| explorer.comparing()).flatten().filter(|_| {
+        explorer.search.as_ref().is_some_and(|s| search::Query::parse(&s.text).dupes)
+    });
+    let no_matches = results.is_some_and(|r| r.matches.is_empty()) && comparing.is_none();
+    // Of duplicates, a copy is left behind, so only those with another copy kept count
+    let collectable = results.map_or(0, |r| {
+        r.matches
+            .iter()
+            .take(MAX_ROWS)
+            .filter(|id| !explorer.is_collected(**id))
+            .filter(|id| {
+                r.dupes.as_ref().is_none_or(|d| {
+                    d.copies(&explorer.tree, **id)
+                        .is_some_and(|c| c.iter().any(|other| other != *id && !explorer.is_collected(*other)))
+                })
+            })
+            .count()
+    });
+    let for_dupes = results.is_some_and(|r| r.dupes.is_some());
     let previewing = explorer.preview.is_some() || explorer.group_preview.is_some();
     let Listing { key: list_key, title, title_color, title_icon, figure: (focus_num, focus_unit), aside, rows, remaining, folder } =
         listing;
@@ -1659,7 +1693,9 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                             )
                         })
                         .when(collectable > 0, |s| {
-                            let label = if results.is_some_and(|r| r.matches.len() > MAX_ROWS) {
+                            let label = if for_dupes {
+                                "Collect extra copies".to_string()
+                            } else if results.is_some_and(|r| r.matches.len() > MAX_ROWS) {
                                 format!("Collect top {MAX_ROWS}")
                             } else {
                                 "Collect all".to_string()
@@ -1727,6 +1763,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                 .overflow_y_scroll()
                 .track_scroll(&explorer.rows_scroll)
                 .pb_2()
+                .when_some(comparing, |s, (done, total)| s.child(comparing_note(done, total)))
                 .when(no_matches, |s| {
                     s.child(
                         div()
@@ -1757,6 +1794,36 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                 }),
         )
         .children(footer)
+}
+
+/// Shown in place of results while the `is:dup` search compares contents
+fn comparing_note(done: u64, total: u64) -> impl IntoElement {
+    let progress = if total == 0 {
+        "Finding files of the same size".to_string()
+    } else {
+        format!("{} of {} read", format::bytes(done.min(total)), format::bytes(total))
+    };
+    div()
+        .flex()
+        .gap_2p5()
+        .px_5()
+        .py_3()
+        .child(
+            div().mt(px(2.)).child(
+                icon(Icon::Loader, 14.0, theme::accent_hi())
+                    .with_animation("comparing", Animation::new(Duration::from_millis(900)).repeat(), |el, t| {
+                        el.with_transformation(gpui::Transformation::rotate(gpui::radians(t * std::f32::consts::TAU)))
+                    }),
+            ),
+        )
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(div().text_sm().text_color(theme::text_muted()).child("Comparing files"))
+                .child(div().text_xs().text_color(theme::text_faint()).child(progress)),
+        )
 }
 
 /// What a well-known item is and how to clear it: under the sidebar's header for the
