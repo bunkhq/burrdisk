@@ -109,7 +109,9 @@ fn list(options: Options) -> ExitCode {
             eprintln!("No earlier scan of {} to compare with yet", path.display());
         }
         let clouds = crate::cloud::in_tree(&tree);
-        search::run(&tree, Tree::ROOT, &query, now, Compared { dupes: dupes.as_ref(), growth: growth.as_ref(), clouds: &clouds })
+        let ignored = crate::ignore::in_tree(&tree, &crate::ignore::load());
+        let compared = Compared { dupes: dupes.as_ref(), growth: growth.as_ref(), clouds: &clouds, ignored: &ignored };
+        search::run(&tree, Tree::ROOT, &query, now, compared)
     });
     let ids: &[NodeId] = match &results {
         Some(results) => &results.matches,

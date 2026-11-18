@@ -67,6 +67,8 @@ pub struct Compared<'a> {
     pub growth: Option<&'a Rc<Growth>>,
     /// The cloud folders in the scan
     pub clouds: &'a [NodeId],
+    /// What suggestions leave out, with everything inside
+    pub ignored: &'a [NodeId],
 }
 
 enum Unit {
@@ -150,6 +152,11 @@ impl Query {
             }
         }
         query
+    }
+
+    /// Whether the query asks for suggestions, which leave out what's ignored
+    pub fn suggests(&self) -> bool {
+        self.safe || self.dupes || self.grown || self.synced
     }
 
     pub fn is_empty(&self) -> bool {
@@ -265,7 +272,11 @@ pub fn run(tree: &Tree, root: NodeId, query: &Query, now: u32, compared: Compare
     let waiting = (query.dupes && dupes.is_none()) || (query.grown && growth.is_none());
     let mut matches = Vec::new();
     let mut stack: Vec<NodeId> = if waiting { Vec::new() } else { tree.node(root).children.to_vec() };
+    let skip = if query.suggests() { compared.ignored } else { &[] };
     while let Some(id) = stack.pop() {
+        if skip.contains(&id) {
+            continue;
+        }
         if query.matches(tree, id, now, compared) {
             matches.push(id);
         } else {
@@ -346,6 +357,11 @@ mod tests {
         // Fresh dependencies belong to a project in use, so they aren't suggested
         assert!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now, Compared::default()).matches.is_empty());
         assert_eq!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now + 30 * DAY, Compared::default()).matches.len(), 1);
+        // What's ignored drops out of suggestions, not out of searches
+        let app = tree.node(Tree::ROOT).children.iter().copied().find(|c| tree.node(*c).name == "app").unwrap();
+        let ignoring = Compared { ignored: &[app], ..Compared::default() };
+        assert!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now + 30 * DAY, ignoring).matches.is_empty());
+        assert_eq!(run(&tree, Tree::ROOT, &Query::parse("node_modules"), now, ignoring).matches.len(), 1);
 
         // Everything was just written, so nothing is a year old
         assert!(run(&tree, Tree::ROOT, &Query::parse(">1y"), now, Compared::default()).matches.is_empty());

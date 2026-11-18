@@ -12,6 +12,7 @@ mod export;
 mod filetype;
 mod format;
 mod history;
+mod ignore;
 mod insight;
 mod platform;
 mod scan;

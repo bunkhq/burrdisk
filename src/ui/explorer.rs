@@ -163,6 +163,14 @@ fn item_menu(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -
     }
     items.push(MenuItem::new(format!("Show in {}", platform::FILE_MANAGER), move |_, cx| cx.reveal_path(&reveal)));
     items.push(MenuItem::new("Open in Terminal", move |_, _| app::open_in_terminal(&terminal)));
+    // Suggestions can be told to leave something out, and told again to bring it back
+    let suggesting = explorer.search.as_ref().is_some_and(|s| search::Query::parse(&s.text).suggests());
+    let ignored = explorer.ignored.contains(&id);
+    if suggesting || ignored {
+        let entity = entity.clone();
+        let label = if ignored { "Suggest Again" } else { "Don\u{2019}t Suggest Again" };
+        items.push(MenuItem::new(label, move |_, cx| entity.update(cx, |this, cx| this.set_ignored(id, !ignored, cx))));
+    }
     if crate::cloud::can_free_up(&explorer.tree, &explorer.clouds, id) {
         let entity = entity.clone();
         items.push(MenuItem::new("Free Up Space", move |_, cx| entity.update(cx, |this, cx| this.free_up(id, cx))));

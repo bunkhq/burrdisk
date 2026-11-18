@@ -82,14 +82,7 @@ fn join(parent: &str, name: &str) -> String {
 
 /// Where scans are remembered
 fn dir() -> Option<PathBuf> {
-    let base = if cfg!(windows) {
-        PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Burrdisk")
-    } else if cfg!(target_os = "macos") {
-        PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/Burrdisk")
-    } else {
-        PathBuf::from(std::env::var_os("HOME")?).join(".local/share/burrdisk")
-    };
-    Some(base.join("History"))
+    Some(crate::platform::data_dir()?.join("History"))
 }
 
 /// Saved scans of one folder or disk, newest first, as (taken, file)

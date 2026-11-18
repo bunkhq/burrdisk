@@ -189,6 +189,8 @@ pub struct Explorer {
     _live: Option<Live>,
     /// The cloud folders in the scan
     pub clouds: Rc<Vec<NodeId>>,
+    /// Items suggestions leave out
+    pub ignored: Rc<Vec<NodeId>>,
 }
 
 /// Watches what was scanned for changes. Each change marks the folder it happened in,
@@ -681,6 +683,7 @@ impl Burrdisk {
     fn open_explorer(&mut self, target: ScanTarget, tree: Tree, scanned_at: Instant, cx: &mut Context<Self>) {
         let segments = Rc::new(sunburst::layout(&tree, Tree::ROOT, Measure::Size, Palette::Wheel));
         let clouds = Rc::new(crate::cloud::in_tree(&tree));
+        let ignored = Rc::new(crate::ignore::in_tree(&tree, &crate::ignore::load()));
         self.screen = Screen::Explorer(Explorer {
             target,
             scanned_at,
@@ -724,6 +727,7 @@ impl Burrdisk {
             _history: None,
             _live: None,
             clouds,
+            ignored,
         });
         let mode = self.chart_mode;
         if let Some(explorer) = self.explorer() {
@@ -1241,6 +1245,28 @@ impl Burrdisk {
         }
     }
 
+    /// Stops suggesting an item, or starts again
+    pub fn set_ignored(&mut self, id: NodeId, ignored: bool, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        explorer.context = None;
+        let path = explorer.tree.path(id);
+        let name = explorer.tree.node(id).name.to_string();
+        match crate::ignore::set(&path, ignored) {
+            Ok(paths) => {
+                explorer.ignored = Rc::new(crate::ignore::in_tree(&explorer.tree, &paths));
+                explorer.run_search();
+                let text = if ignored {
+                    format!("Burrdisk won\u{2019}t suggest \u{201c}{name}\u{201d} again")
+                } else {
+                    format!("Burrdisk can suggest \u{201c}{name}\u{201d} again")
+                };
+                explorer.notice = Some(Notice { text: text.into(), tone: Tone::Info, shown: Instant::now(), put_back: None });
+            }
+            Err(error) => self.show_notice(format!("Couldn\u{2019}t save that: {error}"), true, cx),
+        }
+        cx.notify();
+    }
+
     /// Asks the cloud service to keep an item online only, freeing the space it takes
     /// here. The live view shows the space come back as the service gets to it
     pub fn free_up(&mut self, id: NodeId, cx: &mut Context<Self>) {
@@ -1628,7 +1654,8 @@ impl Explorer {
             Some(Dupes::Found(found)) => Some(found),
             _ => None,
         };
-        let compared = crate::search::Compared { dupes, growth: self.growth.as_ref(), clouds: &self.clouds };
+        let compared =
+            crate::search::Compared { dupes, growth: self.growth.as_ref(), clouds: &self.clouds, ignored: &self.ignored };
         search.results = (!query.is_empty())
             .then(|| Rc::new(crate::search::run(&self.tree, self.focus, &query, crate::format::unix_now(), compared)));
     }

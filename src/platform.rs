@@ -20,6 +20,18 @@ pub const TITLEBAR_INSET: f32 = if cfg!(target_os = "macos") { 76. } else { 0. }
 /// against the window edge, as the system's own do
 pub const TITLEBAR_END: f32 = if cfg!(windows) { 0. } else { 16. };
 
+/// Where Burrdisk keeps what it remembers between launches
+pub fn data_dir() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    Some(if cfg!(windows) {
+        PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Burrdisk")
+    } else if cfg!(target_os = "macos") {
+        PathBuf::from(std::env::var_os("HOME")?).join("Library/Application Support/Burrdisk")
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".local/share/burrdisk")
+    })
+}
+
 /// Runs `verb` on `path` through the Windows shell, as a double-click or a context
 /// menu item in File Explorer would. Returns the started process, if any
 #[cfg(windows)]
