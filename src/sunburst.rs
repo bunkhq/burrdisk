@@ -61,6 +61,15 @@ impl Measure {
     }
 }
 
+/// What colors a folder chart's slices
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Palette {
+    /// Hue by position around the circle, so a folder and its contents share a family
+    Wheel,
+    /// Color by how long ago anything inside last changed, as of `now` (seconds since 1970)
+    Age { now: u32 },
+}
+
 #[derive(Clone, Debug)]
 pub struct Segment {
     pub target: Target,
@@ -99,8 +108,9 @@ impl Geometry {
     }
 }
 
-pub fn layout(tree: &Tree, focus: NodeId, measure: Measure) -> Vec<Segment> {
-    let mut cx = LayoutCx { tree, measure, zoom: None, origin: hue_origin(tree, focus, measure), out: Vec::new() };
+pub fn layout(tree: &Tree, focus: NodeId, measure: Measure, palette: Palette) -> Vec<Segment> {
+    let mut cx =
+        LayoutCx { tree, measure, palette, zoom: None, origin: hue_origin(tree, focus, measure), out: Vec::new() };
     cx.lay_children(focus, 0, 0.0, 1.0, MIN_SPAN, false);
     cx.out
 }
@@ -120,7 +130,7 @@ pub struct Zoom {
 }
 
 impl Zoom {
-    pub fn new(tree: &Tree, from: NodeId, to: NodeId, measure: Measure) -> Option<Self> {
+    pub fn new(tree: &Tree, from: NodeId, to: NodeId, measure: Measure, palette: Palette) -> Option<Self> {
         let (base, inner, zoom_in) = if tree.is_ancestor(from, to) {
             (from, to, true)
         } else if tree.is_ancestor(to, from) {
@@ -138,6 +148,7 @@ impl Zoom {
         let mut cx = LayoutCx {
             tree,
             measure,
+            palette,
             zoom: Some(ZoomCx { inner, path, extra: k, span: None, origin: hue_origin(tree, inner, measure) }),
             origin: hue_origin(tree, base, measure),
             out: Vec::new(),
@@ -185,6 +196,7 @@ struct ZoomCx {
 struct LayoutCx<'a> {
     tree: &'a Tree,
     measure: Measure,
+    palette: Palette,
     zoom: Option<ZoomCx>,
     origin: f32,
     out: Vec<Segment>,
@@ -220,12 +232,25 @@ impl LayoutCx<'_> {
                 cursor += child_span;
                 continue;
             }
-            let kind = tree.node(child).kind;
+            let node = tree.node(child);
+            let kind = node.kind;
             let mid = cursor + child_span / 2.0;
-            let color = color_for(kind, mid - self.origin, depth);
-            let alt = self.alt_color(inside, color, |a, b, k, origin| {
-                color_for(kind, (mid - a) / (b - a) - origin, depth.saturating_sub(k))
-            });
+            let (color, alt) = match self.palette {
+                Palette::Wheel => {
+                    let color = color_for(kind, mid - self.origin, depth);
+                    let alt = self.alt_color(inside, color, |a, b, k, origin| {
+                        color_for(kind, (mid - a) / (b - a) - origin, depth.saturating_sub(k))
+                    });
+                    (color, alt)
+                }
+                Palette::Age { now } => {
+                    let color = age_color(kind, node.modified, now, depth);
+                    let alt = self.alt_color(inside, color, |_, _, k, _| {
+                        age_color(kind, node.modified, now, depth.saturating_sub(k))
+                    });
+                    (color, alt)
+                }
+            };
             self.out.push(Segment {
                 target: Target::Node(child),
                 depth,
@@ -406,9 +431,64 @@ pub fn color_for(kind: NodeKind, position: f32, depth: usize) -> Hsla {
     }
 }
 
+/// Ages the age ramp is pinned to, in days, with the legend's names for them. They
+/// sit evenly along the ramp, so a month and a year read as clearly as a week
+pub const AGE_STOPS: [(f32, &str); 4] = [(0.0, "Today"), (30.0, "1 month"), (365.0, "1 year"), (1826.0, "5+ years")];
+
+/// Where an age falls on the ramp, 0 (today) to 1 (five years or more). Between
+/// stops it runs on a log scale, since a day matters more this week than in 2019
+pub fn age_ratio(days: f32) -> f32 {
+    let days = days.max(0.0);
+    let log = |d: f32| (1.0 + d).ln();
+    let last = AGE_STOPS.len() - 1;
+    for i in 0..last {
+        let (lo, hi) = (AGE_STOPS[i].0, AGE_STOPS[i + 1].0);
+        if days < hi {
+            let t = (log(days) - log(lo)) / (log(hi) - log(lo));
+            return (i as f32 + t) / last as f32;
+        }
+    }
+    1.0
+}
+
+/// The age ramp's colors at each of `AGE_STOPS`, in OKLCH: a cool slate for what
+/// changed today, neutral by a month, then warming to the brand orange by five years,
+/// so what nobody has touched in years is what stands out
+const AGE_COLORS: [(f32, f32, f32); 4] =
+    [(0.50, 0.08, 255.0), (0.58, 0.012, 255.0), (0.68, 0.11, 62.0), (0.78, 0.16, 50.0)];
+
+/// A color on the age ramp, as OKLab. Between stops it blends in OKLab
+pub fn age_ramp(ratio: f32) -> (f32, f32, f32) {
+    let lab = |(l, c, h): (f32, f32, f32)| (l, c * h.to_radians().cos(), c * h.to_radians().sin());
+    let x = ratio.clamp(0.0, 1.0) * (AGE_COLORS.len() - 1) as f32;
+    let i = (x as usize).min(AGE_COLORS.len() - 2);
+    let (a, b, t) = (lab(AGE_COLORS[i]), lab(AGE_COLORS[i + 1]), x - i as f32);
+    (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t)
+}
+
+/// An item's color in the age chart. Files are quieter than folders and deeper rings
+/// a little darker, as on the wheel; items with no known time stay grey
+pub fn age_color(kind: NodeKind, modified: u32, now: u32, depth: usize) -> Hsla {
+    let d = depth as f32;
+    match kind {
+        NodeKind::Hidden => color_for(NodeKind::Hidden, 0.0, 0),
+        _ if modified == 0 => oklch(0.45 - d * 0.02, 0.01, 50.0),
+        _ => {
+            let days = now.saturating_sub(modified) as f32 / 86_400.0;
+            let (l, a, b) = age_ramp(age_ratio(days));
+            let (dl, fade) = if kind == NodeKind::File { (0.05, 0.7) } else { (0.0, 1.0) };
+            oklab(l - dl - d * 0.02, a * fade, b * fade)
+        }
+    }
+}
+
 /// OKLCH (lightness 0..1, chroma, hue in degrees) to an sRGB color
 pub fn oklch(l: f32, c: f32, h: f32) -> Hsla {
-    let (a, b) = (c * h.to_radians().cos(), c * h.to_radians().sin());
+    oklab(l, c * h.to_radians().cos(), c * h.to_radians().sin())
+}
+
+/// OKLab to an sRGB color
+pub fn oklab(l: f32, a: f32, b: f32) -> Hsla {
     let l_ = (l + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
     let m_ = (l - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
     let s_ = (l - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
@@ -786,7 +866,7 @@ mod tests {
         let tree = scan::scan(&dir, "t", &Progress::default()).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
 
-        let segments = layout(&tree, Tree::ROOT, Measure::Size);
+        let segments = layout(&tree, Tree::ROOT, Measure::Size, Palette::Wheel);
         let ring0: Vec<_> = segments.iter().filter(|s| s.depth == 0).collect();
         assert_eq!(ring0.len(), 2);
         assert!(ring0[0].end > 0.6 && ring0[0].start == 0.0);
@@ -805,6 +885,20 @@ mod tests {
     }
 
     #[test]
+    fn ages_fall_on_the_ramp() {
+        assert_eq!(age_ratio(0.0), 0.0);
+        assert!((age_ratio(30.0) - 1.0 / 3.0).abs() < 1e-4);
+        assert!((age_ratio(365.0) - 2.0 / 3.0).abs() < 1e-4);
+        assert_eq!(age_ratio(5000.0), 1.0);
+        assert!(age_ratio(7.0) < age_ratio(8.0));
+        // Older reads brighter, so what nobody touched is what stands out
+        let now = 2_000_000_000;
+        let fresh = age_color(NodeKind::Dir, now - 86_400, now, 0);
+        let stale = age_color(NodeKind::Dir, now - 3000 * 86_400, now, 0);
+        assert!(stale.l > fresh.l);
+    }
+
+    #[test]
     fn count_and_type_layouts() {
         let dir = std::env::temp_dir().join(format!("burrdisk-modes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -818,8 +912,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
 
         // By size the movie leads; by file count the folder of twenty files does
-        let by_size = layout(&tree, Tree::ROOT, Measure::Size);
-        let by_count = layout(&tree, Tree::ROOT, Measure::Count);
+        let by_size = layout(&tree, Tree::ROOT, Measure::Size, Palette::Wheel);
+        let by_count = layout(&tree, Tree::ROOT, Measure::Count, Palette::Wheel);
         let first = |segs: &[Segment]| match segs.iter().find(|s| s.depth == 0).unwrap().target {
             Target::Node(id) => tree.node(id).name.to_string(),
             other => panic!("{other:?}"),
@@ -859,8 +953,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
 
         let big = tree.node(Tree::ROOT).children.iter().copied().find(|c| &*tree.node(*c).name == "big").unwrap();
-        let zoom = Zoom::new(&tree, Tree::ROOT, big, Measure::Size).unwrap();
-        let target = layout(&tree, big, Measure::Size);
+        let zoom = Zoom::new(&tree, Tree::ROOT, big, Measure::Size, Palette::Wheel).unwrap();
+        let target = layout(&tree, big, Measure::Size, Palette::Wheel);
         let (a, b) = (zoom.a, zoom.b);
         for seg in target.iter() {
             let found = zoom
@@ -874,6 +968,6 @@ mod tests {
             assert!((found.alt.h - seg.color.h).abs() < 1e-3 && (found.alt.l - seg.color.l).abs() < 1e-3);
         }
         // Zooming back out is the same move in reverse
-        assert!(Zoom::new(&tree, big, Tree::ROOT, Measure::Size).is_some());
+        assert!(Zoom::new(&tree, big, Tree::ROOT, Measure::Size, Palette::Wheel).is_some());
     }
 }

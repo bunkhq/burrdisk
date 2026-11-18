@@ -13,7 +13,7 @@ use gpui::{
 
 use crate::filetype::Breakdown;
 use crate::scan::{self, NodeId, NodeKind, Progress, Tree};
-use crate::sunburst::{self, Measure, Segment, Target, Zoom};
+use crate::sunburst::{self, Measure, Palette, Segment, Target, Zoom};
 use crate::theme;
 use crate::update::{self, Release};
 use crate::volumes::{self, Volume};
@@ -47,6 +47,8 @@ pub enum ChartMode {
     Count,
     /// Everything inside, grouped by file type and extension
     Types,
+    /// Folders and files sized by space and colored by when they last changed
+    Age,
 }
 
 /// Where an update stands
@@ -272,6 +274,8 @@ pub struct Burrdisk {
     pub sidebar_width: f32,
     /// The user chose to scan without Full Disk Access this session
     pub access_skipped: bool,
+    /// What the chart last showed, so the next disk opens the same way
+    pub chart_mode: ChartMode,
     /// When the access step was opened, for its entrance
     pub access_since: Instant,
     pub updater: Updater,
@@ -301,6 +305,7 @@ impl Burrdisk {
             full_disk_access: volumes::has_full_disk_access(),
             sidebar_width: SIDEBAR_WIDTH,
             access_skipped: false,
+            chart_mode: ChartMode::Size,
             access_since: Instant::now(),
             updater: Updater {
                 phase: UpdatePhase::Idle,
@@ -524,7 +529,7 @@ impl Burrdisk {
     }
 
     fn open_explorer(&mut self, target: ScanTarget, tree: Tree, scanned_at: Instant, cx: &mut Context<Self>) {
-        let segments = Rc::new(sunburst::layout(&tree, Tree::ROOT, Measure::Size));
+        let segments = Rc::new(sunburst::layout(&tree, Tree::ROOT, Measure::Size, Palette::Wheel));
         self.screen = Screen::Explorer(Explorer {
             target,
             scanned_at,
@@ -560,6 +565,10 @@ impl Burrdisk {
             group_preview: None,
             group_focus: None,
         });
+        let mode = self.chart_mode;
+        if let Some(explorer) = self.explorer() {
+            explorer.set_mode(mode);
+        }
         cx.notify();
     }
 
@@ -573,7 +582,7 @@ impl Burrdisk {
     pub fn go_home(&mut self, cx: &mut Context<Self>) {
         // Keep the finished scan so returning to it this session is instant
         if let Screen::Explorer(explorer) = std::mem::replace(&mut self.screen, Screen::Home) {
-            let lobes = sunburst::layout(&explorer.tree, Tree::ROOT, Measure::Size)
+            let lobes = sunburst::layout(&explorer.tree, Tree::ROOT, Measure::Size, Palette::Wheel)
                 .into_iter()
                 .filter(|s| s.depth == 0)
                 .map(|s| Lobe { start: s.start, end: s.end, color: s.color })
@@ -1048,6 +1057,13 @@ impl Explorer {
         }
     }
 
+    pub fn palette(&self) -> Palette {
+        match self.mode {
+            ChartMode::Age => Palette::Age { now: crate::format::unix_now() },
+            _ => Palette::Wheel,
+        }
+    }
+
     /// Rings in the current chart
     pub fn rings(&self) -> usize {
         match (self.mode, &self.breakdown, self.group_focus) {
@@ -1120,7 +1136,7 @@ impl Explorer {
             self.zoom = None;
             self.revealed = Instant::now();
         } else {
-            self.zoom = Zoom::new(&self.tree, self.focus, id, self.measure());
+            self.zoom = Zoom::new(&self.tree, self.focus, id, self.measure(), self.palette());
         }
         self.focus = id;
         // Going up keeps the trail; going anywhere off it starts a new one
@@ -1211,7 +1227,7 @@ impl Explorer {
         } else {
             self.breakdown = None;
             self.group_focus = None;
-            self.segments = Rc::new(sunburst::layout(&self.tree, self.focus, self.measure()));
+            self.segments = Rc::new(sunburst::layout(&self.tree, self.focus, self.measure(), self.palette()));
         }
     }
 

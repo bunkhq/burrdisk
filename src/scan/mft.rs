@@ -353,7 +353,7 @@ fn pick(flags: u8, real: u64, packed: u64) -> u64 {
 
 /// Reads one record of the file table into its slot of `sizes` and `flags`, and its
 /// names into `part`
-fn parse_record(rec: &mut [u8], number: u32, size: &mut u64, flags: &mut u8, part: &mut Part) {
+fn parse_record(rec: &mut [u8], number: u32, size: &mut u64, time: &mut u32, flags: &mut u8, part: &mut Part) {
     if !fix_up(rec) {
         return;
     }
@@ -368,7 +368,10 @@ fn parse_record(rec: &mut [u8], number: u32, size: &mut u64, flags: &mut u8, par
     for attr in attributes(rec) {
         match attr.kind {
             STANDARD_INFORMATION => {
-                attributes_of_file = attr.value().map_or(0, |v| u32at(v, 0x20));
+                if let Some(v) = attr.value().filter(|v| v.len() >= 0x24) {
+                    attributes_of_file = u32at(v, 0x20);
+                    *time = unix_seconds(u64at(v, 0x08));
+                }
             }
             FILE_NAME => {
                 if let Some(value) = attr.value() {
@@ -420,6 +423,13 @@ fn parse_record(rec: &mut [u8], number: u32, size: &mut u64, flags: &mut u8, par
     *flags = f;
 }
 
+/// An NTFS time (100 ns steps since 1601) in whole seconds since 1970, 0 if earlier
+fn unix_seconds(filetime: u64) -> u32 {
+    const EPOCH_GAP: u64 = 11_644_473_600;
+    let secs = (filetime / 10_000_000).saturating_sub(EPOCH_GAP);
+    u32::try_from(secs).unwrap_or(u32::MAX)
+}
+
 fn drive_letter(root: &Path) -> Option<char> {
     match root.to_str()?.as_bytes() {
         [letter, b':', b'\\' | b'/'] if letter.is_ascii_alphabetic() => Some(*letter as char),
@@ -468,9 +478,10 @@ pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Result<Tree
         let _ = free_tx.send(Aligned::new(CHUNK * record));
     }
     let reader = open_unbuffered(&device).ok_or(Failure::Unsupported)?;
-    let (mut sizes, mut flags, Part { names, arena, extra }) = std::thread::scope(|scope| {
+    let (mut sizes, times, mut flags, Part { names, arena, extra }) = std::thread::scope(|scope| {
         let parser = scope.spawn(move || {
             let mut sizes = vec![0u64; records];
+            let mut times = vec![0u32; records];
             let mut flags = vec![0u8; records];
             let mut part = Part::default();
             for (chunk, mut buf) in full_rx {
@@ -478,14 +489,14 @@ pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Result<Tree
                 let count = (records - first).min(CHUNK);
                 for (i, rec) in buf.bytes()[..count * record].chunks_exact_mut(record).enumerate() {
                     let n = first + i;
-                    parse_record(rec, n as u32, &mut sizes[n], &mut flags[n], &mut part);
+                    parse_record(rec, n as u32, &mut sizes[n], &mut times[n], &mut flags[n], &mut part);
                 }
                 let files = flags[first..first + count].iter().filter(|f| **f & (IN_USE | DIR) == IN_USE).count();
                 progress.files.fetch_add(files as u64, Ordering::Relaxed);
                 progress.bytes.fetch_add(sizes[first..first + count].iter().sum(), Ordering::Relaxed);
                 let _ = free_tx.send(buf);
             }
-            (sizes, flags, part)
+            (sizes, times, flags, part)
         });
         let mut outcome = Ok(());
         for chunk in 0..records.div_ceil(CHUNK) {
@@ -554,7 +565,8 @@ pub fn scan(root: &Path, display_name: &str, progress: &Progress) -> Result<Tree
         *slot += 1;
     }
 
-    let table = Table { names: &names, arena: &arena, order: &order, start: &start, sizes: &sizes, flags: &flags };
+    let table =
+        Table { names: &names, arena: &arena, order: &order, start: &start, sizes: &sizes, times: &times, flags: &flags };
     let mut entered = vec![false; records];
     entered[ROOT_RECORD as usize] = true;
     let dir = table.build(ROOT_RECORD as usize, &mut entered);
@@ -572,6 +584,7 @@ struct Table<'a> {
     order: &'a [u32],
     start: &'a [u32],
     sizes: &'a [u64],
+    times: &'a [u32],
     flags: &'a [u8],
 }
 
@@ -593,10 +606,12 @@ impl Table<'_> {
             } else {
                 (self.sizes[record], None)
             };
-            out.children.push(Child { name_end: out.names.len() as u32, size, dir });
+            // A folder takes the newest change inside it, or its own when it's empty
+            let modified = dir.as_ref().map_or(0, |d| d.modified);
+            let modified = if modified != 0 { modified } else { self.times[record] };
+            out.children.push(Child { name_end: out.names.len() as u32, modified, size, dir });
         }
-        out.size = out.children.iter().map(|c| c.size).sum();
-        out.items = out.children.iter().map(Child::items).sum();
+        out.total_up();
         out.names.shrink_to_fit();
         out.children.shrink_to_fit();
         out

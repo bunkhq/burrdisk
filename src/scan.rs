@@ -29,6 +29,9 @@ pub struct Node<'a> {
     /// Files inside (1 for a file); folders themselves aren't counted
     pub items: u64,
     pub kind: NodeKind,
+    /// When it last changed, in seconds since 1970; for a folder, the newest change
+    /// to anything inside. 0 when unknown
+    pub modified: u32,
     pub parent: Option<NodeId>,
     /// Sorted largest first
     pub children: &'a [NodeId],
@@ -42,11 +45,13 @@ struct Slot {
     size: u64,
     items: u64,
     name: u32,
-    name_len: u32,
     parent: u32,
     /// The node's children are `kids[first..first + count]`
     first: u32,
     count: u32,
+    modified: u32,
+    /// File names are at most 255 characters, so their UTF-8 fits in 16 bits
+    name_len: u16,
     kind: NodeKind,
 }
 
@@ -71,6 +76,7 @@ impl Tree {
             size: slot.size,
             items: slot.items,
             kind: slot.kind,
+            modified: slot.modified,
             parent: (slot.parent != NO_PARENT).then_some(slot.parent),
             children: &self.kids[first..first + slot.count as usize],
         }
@@ -170,10 +176,11 @@ impl Tree {
             size,
             items: 0,
             name: self.names.len() as u32,
-            name_len: NAME.len() as u32,
+            name_len: NAME.len() as u16,
             parent: Self::ROOT,
             first: 0,
             count: 0,
+            modified: 0,
             kind: NodeKind::Hidden,
         });
         self.names.push_str(NAME);
@@ -219,12 +226,16 @@ struct Dir {
     /// Totals of the children's sizes and file counts
     size: u64,
     items: u64,
+    /// The newest change among the children
+    modified: u32,
 }
 
 struct Child {
     /// Where this child's name ends in its folder's `names`. It starts where the
     /// previous child's ends
     name_end: u32,
+    /// For a folder, the newest change inside it, or its own when it's empty
+    modified: u32,
     /// For a folder, its own size plus everything inside
     size: u64,
     dir: Option<Box<Dir>>,
@@ -299,7 +310,7 @@ impl Walker<'_> {
             };
             bytes += size;
             out.names.push_str(&item.file_name().to_string_lossy());
-            out.children.push(Child { name_end: out.names.len() as u32, size, dir: None });
+            out.children.push(Child { name_end: out.names.len() as u32, modified: modified(&meta), size, dir: None });
         }
         self.progress.files.fetch_add(files, Ordering::Relaxed);
         self.progress.bytes.fetch_add(bytes, Ordering::Relaxed);
@@ -315,10 +326,12 @@ impl Walker<'_> {
         for (ix, own, dir) in walked {
             let child = &mut out.children[ix];
             child.size = own + dir.size;
+            if dir.modified != 0 {
+                child.modified = dir.modified;
+            }
             child.dir = Some(Box::new(dir));
         }
-        out.size = out.children.iter().map(|c| c.size).sum();
-        out.items = out.children.iter().map(Child::items).sum();
+        out.total_up();
         // Growing buffers leave up to half their room empty; hand it back before the
         // whole walk is held in memory at once
         out.names.shrink_to_fit();
@@ -354,6 +367,24 @@ impl Walker<'_> {
     fn first_link(&self, _meta: &fs::Metadata) -> bool {
         true
     }
+}
+
+impl Dir {
+    /// Sums the children's sizes and file counts and finds their newest change
+    fn total_up(&mut self) {
+        self.size = self.children.iter().map(|c| c.size).sum();
+        self.items = self.children.iter().map(Child::items).sum();
+        self.modified = self.children.iter().map(|c| c.modified).max().unwrap_or(0);
+    }
+}
+
+/// When a file last changed, in whole seconds since 1970 (0 if unknown or earlier).
+/// 32 bits last until 2106
+fn modified(meta: &fs::Metadata) -> u32 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX))
 }
 
 /// Bytes actually allocated on disk, so sparse and compressed files count correctly
@@ -476,10 +507,11 @@ fn flatten(root: Dir, name: &str, own: u64, root_path: PathBuf) -> Tree {
                 size: child.size,
                 items: child.items(),
                 name: tree.names.len() as u32,
-                name_len: text.len() as u32,
+                name_len: text.len() as u16,
                 parent: id,
                 first: 0,
                 count: 0,
+                modified: child.modified,
                 kind: if child.dir.is_some() { NodeKind::Dir } else { NodeKind::File },
             });
             tree.names.push_str(text);
@@ -502,14 +534,20 @@ fn flatten(root: Dir, name: &str, own: u64, root_path: PathBuf) -> Tree {
         root_path,
         duration: Duration::ZERO,
     };
+    let mut end = name.len().min(u16::MAX as usize);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    let name = &name[..end];
     tree.slots.push(Slot {
         size: own + root.size,
         items: root.items,
         name: 0,
-        name_len: name.len() as u32,
+        name_len: name.len() as u16,
         parent: NO_PARENT,
         first: 0,
         count: 0,
+        modified: root.modified,
         kind: NodeKind::Dir,
     });
     tree.names.push_str(name);
@@ -715,7 +753,7 @@ pub fn run_helper(args: &[std::ffi::OsString]) -> std::process::ExitCode {
     if written.is_ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
-const TREE_MAGIC: &[u8; 4] = b"BDT2";
+const TREE_MAGIC: &[u8; 4] = b"BDT3";
 
 impl Tree {
     /// Serializes the tree for handing it from the admin helper to the app
@@ -733,6 +771,7 @@ impl Tree {
             out.write_all(&[kind])?;
             out.write_all(&node.size.to_le_bytes())?;
             out.write_all(&node.items.to_le_bytes())?;
+            out.write_all(&node.modified.to_le_bytes())?;
             out.write_all(&node.parent.unwrap_or(NO_PARENT).to_le_bytes())?;
             out.write_all(&(node.name.len() as u32).to_le_bytes())?;
             out.write_all(node.name.as_bytes())?;
@@ -768,12 +807,19 @@ impl Tree {
             input.read_exact(&mut u64_buf)?;
             let items = u64::from_le_bytes(u64_buf);
             input.read_exact(&mut u32_buf)?;
+            let modified = u32::from_le_bytes(u32_buf);
+            input.read_exact(&mut u32_buf)?;
             let parent = u32::from_le_bytes(u32_buf);
             if parent != NO_PARENT && parent as usize >= id {
                 return Err(Error::new(ErrorKind::InvalidData, "parent after child"));
             }
             input.read_exact(&mut u32_buf)?;
-            name.resize(u32::from_le_bytes(u32_buf) as usize, 0);
+            let len = u32::from_le_bytes(u32_buf) as usize;
+            // Invalid UTF-8 can grow threefold when replaced, and must still fit 16 bits
+            if len > u16::MAX as usize / 3 {
+                return Err(Error::new(ErrorKind::InvalidData, "name too long"));
+            }
+            name.resize(len, 0);
             input.read_exact(&mut name)?;
             let start = names.len();
             names.push_str(&String::from_utf8_lossy(&name));
@@ -781,10 +827,11 @@ impl Tree {
                 size,
                 items,
                 name: start as u32,
-                name_len: (names.len() - start) as u32,
+                name_len: (names.len() - start) as u16,
                 parent,
                 first: 0,
                 count: 0,
+                modified,
                 kind: match kind[0] {
                     0 => NodeKind::Dir,
                     1 => NodeKind::File,
@@ -848,8 +895,15 @@ mod tests {
 
         let progress = Progress::default();
         let mut tree = scan(&dir, "test", &progress).unwrap();
+        // A node stays 40 bytes however many files a scan holds
+        assert_eq!(std::mem::size_of::<Slot>(), 40);
         let root = tree.node(Tree::ROOT);
         assert_eq!(root.children.len(), 2);
+        // Folders carry the newest change inside them
+        let now = crate::format::unix_now();
+        assert!(root.modified > now - 3600 && root.modified <= now + 60);
+        let newest = root.children.iter().map(|c| tree.node(*c).modified).max().unwrap();
+        assert_eq!(root.modified, newest);
         let a = root.children[0];
         assert_eq!(&*tree.node(a).name, "a");
         assert!(tree.node(a).size >= 200_000);
@@ -867,6 +921,7 @@ mod tests {
         let read = Tree::read(&bytes[..], dir.clone()).unwrap();
         assert_eq!(read.node(Tree::ROOT).size, tree.node(Tree::ROOT).size);
         assert_eq!(read.node(Tree::ROOT).children, tree.node(Tree::ROOT).children);
+        assert_eq!(read.node(a).modified, tree.node(a).modified);
         assert_eq!(read.path(a), dir.join("a"));
 
         fs::remove_dir_all(&dir).unwrap();

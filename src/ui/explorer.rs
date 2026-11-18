@@ -368,10 +368,11 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
 }
 
 /// Chart modes, as the switch in the titlebar names them
-const MODES: [(ChartMode, &str); 3] = [
+const MODES: [(ChartMode, &str); 4] = [
     (ChartMode::Size, "Size"),
     (ChartMode::Count, "File Count"),
     (ChartMode::Types, "File Types"),
+    (ChartMode::Age, "Age"),
 ];
 
 /// A segmented switch for what the chart's slices stand for
@@ -415,6 +416,7 @@ fn mode_switch(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElem
                 // drag area and the click never arrives
                 .occlude()
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    this.chart_mode = mode;
                     if let Some(explorer) = this.explorer() {
                         explorer.set_mode(mode);
                         cx.notify();
@@ -435,6 +437,13 @@ fn figure(explorer: &Explorer, id: NodeId) -> String {
         ChartMode::Count => files(node.items),
         _ => format::bytes(node.size),
     }
+}
+
+/// When an item last changed, for the age chart: "Changed 3 years ago". A folder
+/// changed when anything inside it last did
+fn changed(explorer: &Explorer, id: NodeId) -> Option<String> {
+    let ago = format::ago(explorer.tree.node(id).modified, format::unix_now())?;
+    Some(format!("Changed {}", ago.to_lowercase()))
 }
 
 /// The icon for an item, by what kind of file it is
@@ -490,7 +499,11 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         (Some(Hover::Target(Target::Node(id))), _) => {
             let node = explorer.tree.node(id);
             let hint = if breakdown.is_some() { hint_for(NodeKind::File) } else { hint_for(node.kind) };
-            (node.name.to_string(), figure(explorer, id), hint.into())
+            let hint = match explorer.mode {
+                ChartMode::Age => changed(explorer, id).unwrap_or_else(|| hint.into()),
+                _ => hint.into(),
+            };
+            (node.name.to_string(), figure(explorer, id), hint)
         }
         (Some(Hover::Target(Target::Smaller(parent))), _) => {
             let (count, value) = smaller_summary(explorer, parent);
@@ -523,7 +536,11 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
         }
         _ => {
             let node = explorer.tree.node(explorer.focus);
-            (node.name.to_string(), figure(explorer, explorer.focus), String::new())
+            let hint = match explorer.mode {
+                ChartMode::Age => changed(explorer, explorer.focus).unwrap_or_default(),
+                _ => String::new(),
+            };
+            (node.name.to_string(), figure(explorer, explorer.focus), hint)
         }
     };
     // The label lives inside the center disc, so it scales with the chart.
@@ -540,6 +557,7 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let going_up = explorer.hover == Some(Hover::Center) && can_go_up;
     let label_key = format!("{}-{:?}-{:?}", explorer.focus, explorer.mode, explorer.hover);
     let types = explorer.mode == ChartMode::Types;
+    let ages = explorer.mode == ChartMode::Age;
     let pointer = (!types && matches!(explorer.hover, Some(Hover::Target(Target::Node(_)))))
         || matches!(explorer.hover, Some(Hover::Target(Target::Group(_))))
         || going_up;
@@ -705,6 +723,60 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         ),
                 ),
         )
+        .when(ages, |s| s.child(age_legend()))
+}
+
+/// The age chart's key: its color ramp, with the ages it's pinned to beneath. Each
+/// label is centered in a quarter of the key, and the ramp runs from the middle of
+/// the first quarter to the middle of the last, so every label sits on its stop
+fn age_legend() -> impl IntoElement {
+    const WIDTH: f32 = 224.;
+    let color = |ratio: f32| {
+        let (l, a, b) = sunburst::age_ramp(ratio);
+        sunburst::oklab(l, a, b)
+    };
+    div()
+        .absolute()
+        .left(px(-WIDTH / 8. + 14.))
+        .bottom_0()
+        .w(px(WIDTH))
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(
+            div()
+                .flex()
+                .mx(px(WIDTH / 8.))
+                .h(px(6.))
+                .rounded_full()
+                .overflow_hidden()
+                // The ramp blends in OKLab between stops, so one gradient per stretch draws it exactly
+                .children((0..3).map(|i| {
+                    let (from, to) = (color(i as f32 / 3.), color((i + 1) as f32 / 3.));
+                    div().flex_1().h_full().bg(linear_gradient(
+                        90.,
+                        linear_color_stop(from, 0.),
+                        linear_color_stop(to, 1.),
+                    )
+                    .color_space(gpui::ColorSpace::Oklab))
+                })),
+        )
+        .child(
+            div()
+                .flex()
+                .text_size(px(11.))
+                .text_color(theme::text_faint())
+                .children(
+                    sunburst::AGE_STOPS
+                        .iter()
+                        .map(|(_, label)| div().flex_1().flex().justify_center().whitespace_nowrap().child(*label)),
+                ),
+        )
+        .with_animation(
+            "age-legend",
+            Animation::new(Duration::from_millis(320)).with_easing(ease_out_quint()),
+            |el, t| el.opacity(t).mb(px(-6. * (1. - t))),
+        )
 }
 
 /// Per-segment highlight, background dim and center glow, cross-fading between the
@@ -801,6 +873,8 @@ struct Row {
     /// Share of the listed whole, by the chart's measure
     ratio: f32,
     figure: String,
+    /// Shown under the figure in place of the share, e.g. how long ago it changed
+    note: Option<String>,
     /// A real item, which can be opened, dragged and right-clicked
     node: Option<NodeId>,
     /// Clicking opens it in the chart
@@ -813,7 +887,7 @@ struct Row {
 const COMPACT_RATIO: f32 = 0.001;
 
 fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: bool, cx: &mut Context<Burrdisk>) -> AnyElement {
-    let Row { key, target, name, detail, glyph, app, color, ratio, figure, node, opens, collected, muted } = row;
+    let Row { key, target, name, detail, glyph, app, color, ratio, figure, note, node, opens, collected, muted } = row;
     let app = app.and_then(|ext| appicon::for_extension(&ext, cx));
     // A row stays lit while its right-click menu is open
     let is_hovered = explorer.hover == Some(Hover::Target(target))
@@ -956,7 +1030,13 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
                     .items_end()
                     .min_w(px(70.))
                     .child(div().text_sm().font_weight(FontWeight::SEMIBOLD).whitespace_nowrap().child(figure))
-                    .child(div().text_xs().text_color(theme::text_faint()).child(format_percent(ratio))),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme::text_faint())
+                            .whitespace_nowrap()
+                            .child(note.unwrap_or_else(|| format_percent(ratio))),
+                    ),
             )
             .child(chevron)
     };
@@ -1000,6 +1080,9 @@ fn node_row(explorer: &Explorer, id: NodeId, whole: u64, color: Hsla) -> Row {
         color,
         ratio: part as f32 / whole.max(1) as f32,
         figure: figure(explorer, id),
+        note: (explorer.mode == ChartMode::Age)
+            .then(|| format::ago(node.modified, format::unix_now()))
+            .flatten(),
         node: (node.kind != NodeKind::Hidden).then_some(id),
         opens: node.kind == NodeKind::Dir && !types,
         collected: explorer.is_collected(id),
@@ -1023,6 +1106,7 @@ fn group_row(breakdown: &Breakdown, g: u32, whole: u64, detail: bool) -> Row {
         color,
         ratio: group.size as f32 / whole.max(1) as f32,
         figure: format::bytes(group.size),
+        note: None,
         node: None,
         opens: true,
         collected: false,
@@ -1068,7 +1152,11 @@ fn folder_listing(explorer: &Explorer) -> Listing {
     } else {
         format::bytes_parts(node.size)
     };
-    let aside = if count_mode { format::bytes(node.size) } else { files(node.items) };
+    let aside = match explorer.mode {
+        ChartMode::Count => format::bytes(node.size),
+        ChartMode::Age => changed(explorer, listed).unwrap_or_else(|| files(node.items)),
+        _ => files(node.items),
+    };
     Listing {
         key: format!("{listed}-{:?}", explorer.mode),
         title: node.name.to_string(),

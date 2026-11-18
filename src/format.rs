@@ -52,9 +52,48 @@ pub fn clock(d: std::time::Duration) -> String {
     if n < 3600 { format!("{}:{:02}", n / 60, n % 60) } else { format!("{}:{:02}:{:02}", n / 3600, n % 3600 / 60, n % 60) }
 }
 
+/// Seconds since 1970, the clock file times are kept in
+pub fn unix_now() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u32::try_from(d.as_secs()).unwrap_or(u32::MAX))
+}
+
+/// How long ago something changed, as people say it: "Today", "3 weeks ago",
+/// "2 years ago". `None` when the time is unknown
+pub fn ago(modified: u32, now: u32) -> Option<String> {
+    if modified == 0 {
+        return None;
+    }
+    let days = now.saturating_sub(modified) / 86_400;
+    let unit = |n: u32, one: &str| if n == 1 { format!("1 {one} ago") } else { format!("{n} {one}s ago") };
+    Some(match days {
+        0 => "Today".into(),
+        1 => "Yesterday".into(),
+        2..=6 => unit(days, "day"),
+        7..=29 => unit(days / 7, "week"),
+        30..=364 => unit((days / 30).min(11), "month"),
+        _ => unit(days / 365, "year"),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_ages() {
+        let day = 86_400;
+        let now = 2_000_000_000;
+        assert_eq!(ago(0, now), None);
+        assert_eq!(ago(now - 60, now).as_deref(), Some("Today"));
+        assert_eq!(ago(now + 60, now).as_deref(), Some("Today"));
+        assert_eq!(ago(now - day, now).as_deref(), Some("Yesterday"));
+        assert_eq!(ago(now - 9 * day, now).as_deref(), Some("1 week ago"));
+        assert_eq!(ago(now - 100 * day, now).as_deref(), Some("3 months ago"));
+        assert_eq!(ago(now - 362 * day, now).as_deref(), Some("11 months ago"));
+        assert_eq!(ago(now - 800 * day, now).as_deref(), Some("2 years ago"));
+    }
 
     #[test]
     fn formats_bytes() {

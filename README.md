@@ -60,12 +60,13 @@ It is a native app written in Rust with [GPUI](https://gpui.rs), the GPU-acceler
 ## How it works
 
 1. **Pick a disk.** Home lists your disks, with the startup disk first and other drives below. Before a scan, each burr's spines show how full the disk is. The menu beside each Scan button can rescan (also as administrator), forget a scan, show the disk in Finder (File Explorer on Windows), or open Get Info (Properties). You can also scan any folder.
-2. **Explore.** The scan shows live progress. The explorer then draws the disk as a sunburst. Each ring is one level deeper in the folder tree, and each slice is sized by the space it takes. You can color the chart by size, by file count or by file type. The sidebar lists everything in the current folder, largest first.
+2. **Explore.** The scan shows live progress. The explorer then draws the disk as a sunburst. Each ring is one level deeper in the folder tree, and each slice is sized by the space it takes. You can size the chart by space or by file count, group it by file type, or color it by age to see what nobody has touched in months or years. The sidebar lists everything in the current folder, largest first.
 3. **Collect, then clean.** Drag files and folders from the chart or the list into the Collector at the bottom, or right-click one and pick **Move to Collector**. When the pile looks right, **Move to Trash** starts a 5-second countdown. **Stop** or `Esc` cancels it.
 
 ### What the numbers mean
 
 - Sizes are the bytes a file takes on disk, not its length, so sparse and compressed files count correctly. Hard links are counted once.
+- Ages are when a file's contents last changed. A folder is as old as the newest thing inside it, so a folder shown as 3 years old holds nothing changed since then. Opening a file without saving it doesn't make it younger.
 - On the startup disk, space the scan can't see (snapshots, protected system files) shows as **Hidden space**. On macOS, give Burrdisk Full Disk Access in System Settings to see more.
 - On Windows, files that OneDrive keeps online count only as the space they use locally. Hard links, which are common under `C:\Windows\WinSxS`, are counted at every path, so that folder can look larger than it is.
 - On Windows, **Rescan as Administrator** asks for a UAC prompt. For a whole NTFS drive, it then reads the disk's file table directly instead of opening every folder. That is several times faster, and it also counts space that normal scans can't see, such as System Volume Information.
