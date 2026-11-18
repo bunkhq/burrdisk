@@ -187,6 +187,8 @@ pub struct Explorer {
     _history: Option<Task<()>>,
     /// Keeps the tree up to date with changes made outside Burrdisk
     _live: Option<Live>,
+    /// A search waiting for a pause in typing
+    _typing: Option<Task<()>>,
     /// The cloud folders in the scan
     pub clouds: Rc<Vec<NodeId>>,
     /// Items suggestions leave out
@@ -203,6 +205,9 @@ struct Live {
 const LIVE_EVERY: Duration = Duration::from_millis(1500);
 /// How often the disk list and free space are read again
 const VOLUMES_EVERY: Duration = Duration::from_secs(4);
+/// Above this many files under the focus, a search waits for a pause in typing
+const BIG_SEARCH: u64 = 200_000;
+const TYPING_PAUSE: Duration = Duration::from_millis(150);
 
 /// Comparing file contents for the `is:dup` search, which starts the first time a
 /// search asks for duplicates and covers the whole scan
@@ -726,6 +731,7 @@ impl Burrdisk {
             growth: None,
             _history: None,
             _live: None,
+            _typing: None,
             clouds,
             ignored,
         });
@@ -1169,8 +1175,7 @@ impl Burrdisk {
                 let line = text.lines().next().unwrap_or_default().to_string();
                 let explorer = self.explorer().expect("explorer");
                 let joined = format!("{}{line}", explorer.search.as_ref().map_or("", |s| s.text.as_str()));
-                explorer.set_search_text(joined);
-                cx.notify();
+                self.type_search(joined, cx);
             }
             return;
         }
@@ -1182,8 +1187,7 @@ impl Burrdisk {
             } else {
                 text.pop();
             }
-            explorer.set_search_text(text);
-            cx.notify();
+            self.type_search(text, cx);
             return;
         }
         // Ctrl with Alt is AltGr on Windows, which types characters
@@ -1206,7 +1210,32 @@ impl Burrdisk {
             text.push(' ');
         }
         text.push_str(typed);
-        explorer.set_search_text(text);
+        self.type_search(text, cx);
+    }
+
+    /// Search text typed in. A search walks everything under the focus, so in a big
+    /// scan it waits for a pause in typing
+    fn type_search(&mut self, text: String, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        let now = explorer.tree.node(explorer.focus).items < BIG_SEARCH
+            || explorer.results().is_none()
+            || text.trim().is_empty();
+        explorer.search.get_or_insert_with(Search::default).text = text;
+        explorer._typing = None;
+        if now {
+            explorer.run_search();
+        } else {
+            explorer._typing = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(TYPING_PAUSE).await;
+                this.update(cx, |this, cx| {
+                    if let Some(explorer) = this.explorer() {
+                        explorer.run_search();
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }));
+        }
         cx.notify();
     }
 
