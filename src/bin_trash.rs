@@ -41,6 +41,17 @@ pub fn open() {
 /// these paths, the latest of each. Returns how many came back
 #[cfg(windows)]
 pub fn put_back(paths: &[PathBuf], since: i64) -> Result<usize, String> {
+    // `trash` sets up single-threaded COM and panics on a thread that already runs
+    // multithreaded COM, as the thread pool behind background tasks does. A thread
+    // of its own always starts clean
+    let paths = paths.to_vec();
+    std::thread::spawn(move || restore(&paths, since))
+        .join()
+        .unwrap_or_else(|_| Err("the Recycle Bin couldn\u{2019}t be read".into()))
+}
+
+#[cfg(windows)]
+fn restore(paths: &[PathBuf], since: i64) -> Result<usize, String> {
     let wanted: std::collections::HashSet<&PathBuf> = paths.iter().collect();
     let mut items: Vec<trash::TrashItem> = trash::os_limited::list()
         .map_err(|e| e.to_string())?
