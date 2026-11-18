@@ -332,6 +332,7 @@ Tactile and lit, like small backlit keys.
 
 ### Scan Time
 - **While scanning:** a running clock ("0:07", "1:02:05") in 12px faint text under the file count, inside the progress ring.
+- **Live:** the explorer watches what it scanned. A change marks the folder it happened in, and every 1.5 s the marked folders are listed again and the tree updated in place, without animation, so the chart, list and search catch up quietly. Updates wait while a zoom, press, drag, menu, countdown or move to the Trash is under way. Items that disappear leave the Collector, and a focused folder that disappears gives way to the nearest one that still exists. Home and the explorer's footer read the disks again every 4 s and when the window comes to the front.
 - **After:** the explorer's footer at the scan's top folder adds a "Scan time" row ("8.5 s", "42 s", "3 min 12 s") under Available, Purgeable and Capacity; folder scans, which have no volume figures, show the footer with this row alone. On home, the cached-scan line says how long it took: "Scanned 3 min ago in 8.5 s". The time is the walk itself, measured inside the scan, so an admin scan's password prompt doesn't count.
 
 ### Toast

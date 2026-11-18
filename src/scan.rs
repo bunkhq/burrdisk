@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -166,6 +166,152 @@ impl Tree {
         let (first, count) = (slot.first as usize, slot.count as usize);
         let slots = &self.slots;
         self.kids[first..first + count].sort_by(|a, b| slots[*b as usize].size.cmp(&slots[*a as usize].size));
+    }
+
+    /// The deepest folder in the tree on the way to `path`, or `None` when the path
+    /// is outside what was scanned
+    pub fn deepest(&self, path: &Path) -> Option<NodeId> {
+        let inside = path.strip_prefix(&self.root_path).ok()?;
+        let mut id = Self::ROOT;
+        for part in inside.components() {
+            let part = part.as_os_str().to_string_lossy();
+            let next = self.node(id).children.iter().copied().find(|c| {
+                let c = self.node(*c);
+                c.kind == NodeKind::Dir && c.name == part
+            });
+            match next {
+                Some(next) => id = next,
+                None => break,
+            }
+        }
+        Some(id)
+    }
+
+    /// The names of a folder's subfolders, which a listing of it again needn't walk
+    pub fn subfolders(&self, id: NodeId) -> HashSet<String> {
+        self.node(id)
+            .children
+            .iter()
+            .map(|c| self.node(*c))
+            .filter(|c| c.kind == NodeKind::Dir)
+            .map(|c| c.name.to_string())
+            .collect()
+    }
+
+    /// Brings a folder up to date with a fresh listing of it. Items still there keep
+    /// their ids, so anything pointing at them stays valid; items gone are detached
+    /// as `remove` does. Returns whether anything changed
+    pub fn apply(&mut self, relisted: Relisted) -> bool {
+        let Relisted { id, entries } = relisted;
+        if self.node(id).kind != NodeKind::Dir || !self.is_attached(id) {
+            return false;
+        }
+        let old: Vec<NodeId> = self.node(id).children.to_vec();
+        let old_sum: u64 = old.iter().map(|c| self.node(*c).size).sum();
+        let own = self.node(id).size.saturating_sub(old_sum);
+        let mut by_name: HashMap<String, NodeId> = old.iter().map(|c| (self.node(*c).name.to_string(), *c)).collect();
+        let mut kids = Vec::with_capacity(entries.len() + 1);
+        // Items replaced by something else of the same name
+        let mut gone = Vec::new();
+        let mut changed = false;
+        for Entry { name, size, modified, kind } in entries {
+            let existing = by_name.remove(&name);
+            let existing_kind = existing.map(|c| self.node(c).kind);
+            match (kind, existing) {
+                (EntryKind::Known, Some(c)) if existing_kind == Some(NodeKind::Dir) => kids.push(c),
+                // Changed again since it was listed; the next listing catches up
+                (EntryKind::Known, _) => gone.extend(existing),
+                (EntryKind::File { linked }, Some(c)) if existing_kind == Some(NodeKind::File) => {
+                    let slot = &mut self.slots[c as usize];
+                    // Another link to a file is counted where the scan first met it
+                    let size = if linked { slot.size } else { size };
+                    if slot.size != size || slot.modified != modified {
+                        slot.size = size;
+                        slot.modified = modified;
+                        changed = true;
+                    }
+                    kids.push(c);
+                }
+                (kind, existing) => {
+                    gone.extend(existing);
+                    // A new link to a file already counted takes no more space
+                    let size = if matches!(kind, EntryKind::File { linked: true }) { 0 } else { size };
+                    changed = true;
+                    kids.push(self.add_child(id, &name, size, modified, kind));
+                }
+            }
+        }
+        for c in by_name.into_values().chain(gone) {
+            // Hidden space isn't a file, so it's never listed
+            if self.node(c).kind == NodeKind::Hidden {
+                kids.push(c);
+            } else {
+                self.slots[c as usize].parent = NO_PARENT;
+                changed = true;
+            }
+        }
+        if !changed {
+            return false;
+        }
+
+        let slots = &self.slots;
+        kids.sort_by(|a, b| slots[*b as usize].size.cmp(&slots[*a as usize].size));
+        let slot = &self.slots[id as usize];
+        let (first, count) = (slot.first as usize, slot.count as usize);
+        let first = if kids.len() <= count {
+            self.kids[first..first + kids.len()].copy_from_slice(&kids);
+            first
+        } else {
+            let at = self.kids.len();
+            self.kids.extend_from_slice(&kids);
+            at
+        };
+        let size = own + kids.iter().map(|c| self.node(*c).size).sum::<u64>();
+        let items: u64 = kids.iter().map(|c| self.node(*c).items).sum();
+        let newest = kids.iter().map(|c| self.node(*c).modified).max().unwrap_or(0);
+        let slot = &mut self.slots[id as usize];
+        let (size_delta, items_delta) = (size as i64 - slot.size as i64, items as i64 - slot.items as i64);
+        slot.first = first as u32;
+        slot.count = kids.len() as u32;
+        slot.size = size;
+        slot.items = items;
+        slot.modified = slot.modified.max(newest);
+
+        let mut cursor = self.node(id).parent;
+        while let Some(current) = cursor {
+            let slot = &mut self.slots[current as usize];
+            slot.size = slot.size.saturating_add_signed(size_delta);
+            slot.items = slot.items.saturating_add_signed(items_delta);
+            slot.modified = slot.modified.max(newest);
+            self.sort_children(current);
+            cursor = self.node(current).parent;
+        }
+        true
+    }
+
+    fn add_child(&mut self, parent: NodeId, name: &str, size: u64, modified: u32, kind: EntryKind) -> NodeId {
+        let id = self.slots.len() as NodeId;
+        let (items, node_kind, dir) = match kind {
+            EntryKind::New(dir) => (dir.items, NodeKind::Dir, Some(dir)),
+            EntryKind::File { .. } => (1, NodeKind::File, None),
+            EntryKind::Known => (0, NodeKind::Dir, None),
+        };
+        self.slots.push(Slot {
+            size,
+            items,
+            name: self.names.len() as u32,
+            name_len: name.len() as u16,
+            parent,
+            first: self.kids.len() as u32,
+            count: 0,
+            modified,
+            kind: node_kind,
+        });
+        self.names.push_str(name);
+        if let Some(dir) = dir {
+            place(*dir, id, self);
+        }
+        id
     }
 
     /// Adds a pseudo-entry for space the scan could not see
@@ -474,6 +620,116 @@ fn skipped_paths(root: &Path) -> Vec<PathBuf> {
     }
 }
 
+/// A folder listed again after something inside it changed, for `Tree::apply`
+pub struct Relisted {
+    id: NodeId,
+    entries: Vec<Entry>,
+}
+
+struct Entry {
+    name: String,
+    size: u64,
+    modified: u32,
+    kind: EntryKind,
+}
+
+enum EntryKind {
+    /// `linked` when other paths share the file, which the scan counts only once
+    File { linked: bool },
+    /// A subfolder the tree already has, which keeps what it holds
+    Known,
+    /// A subfolder new since the scan, walked whole
+    New(Box<Dir>),
+}
+
+/// Lists folder `id` at `path` again, walking subfolders the tree doesn't have yet,
+/// with the same rules as the scan of `root`. `None` when it can't be read
+pub fn relist(root: &Path, path: &Path, id: NodeId, known: &HashSet<String>) -> Option<Relisted> {
+    let progress = Progress::default();
+    let walker = Walker {
+        devices: devices_for(root),
+        skip: skipped_paths(root),
+        hard_links: Mutex::default(),
+        progress: &progress,
+    };
+    let mut entries = Vec::new();
+    for item in fs::read_dir(path).ok()?.flatten() {
+        let Ok(meta) = item.metadata() else { continue };
+        let name = item.file_name().to_string_lossy().to_string();
+        let mut modified = modified(&meta);
+        let (kind, size) = if meta.file_type().is_dir() {
+            let sub = item.path();
+            if !walker.same_device(&meta) || walker.skip.iter().any(|s| s == &sub) {
+                continue;
+            }
+            if known.contains(&name) {
+                (EntryKind::Known, 0)
+            } else {
+                let dir = walker.walk(&sub);
+                if dir.modified != 0 {
+                    modified = dir.modified;
+                }
+                let size = allocated(&meta) + dir.size;
+                (EntryKind::New(Box::new(dir)), size)
+            }
+        } else {
+            (EntryKind::File { linked: hard_linked(&meta) }, file_allocated(&meta, &item))
+        };
+        entries.push(Entry { name, size, modified, kind });
+    }
+    Some(Relisted { id, entries })
+}
+
+#[cfg(unix)]
+fn hard_linked(meta: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() > 1
+}
+
+/// The walk on Windows counts hard links at every path, so a listing does too
+#[cfg(not(unix))]
+fn hard_linked(_meta: &fs::Metadata) -> bool {
+    false
+}
+
+/// Adds a walked folder's contents under node `id`, its children as one run of `kids`
+fn place(dir: Dir, id: NodeId, tree: &mut Tree) {
+    let Dir { names, children, .. } = dir;
+    let mut start = 0;
+    let mut children: Vec<(u32, Child)> = children
+        .into_iter()
+        .map(|child| (std::mem::replace(&mut start, child.name_end), child))
+        .collect();
+    children.sort_unstable_by_key(|(_, child)| std::cmp::Reverse(child.size));
+
+    let first_id = tree.slots.len() as NodeId;
+    let slot = &mut tree.slots[id as usize];
+    slot.first = tree.kids.len() as u32;
+    slot.count = children.len() as u32;
+    for (i, (start, child)) in children.iter().enumerate() {
+        let text = &names[*start as usize..child.name_end as usize];
+        tree.slots.push(Slot {
+            size: child.size,
+            items: child.items(),
+            name: tree.names.len() as u32,
+            name_len: text.len() as u16,
+            parent: id,
+            first: 0,
+            count: 0,
+            modified: child.modified,
+            kind: if child.dir.is_some() { NodeKind::Dir } else { NodeKind::File },
+        });
+        tree.names.push_str(text);
+        tree.kids.push(first_id + i as NodeId);
+    }
+    drop(names);
+    for (i, (_, child)) in children.into_iter().enumerate() {
+        if let Some(sub) = child.dir {
+            place(*sub, first_id + i as NodeId, tree);
+        }
+    }
+}
+
 /// Lays the walk out as a `Tree`. Each folder's children get consecutive ids, so
 /// its child list is one run of `kids`, and each folder's names and records are freed
 /// as soon as they are copied
@@ -484,43 +740,6 @@ fn flatten(root: Dir, name: &str, own: u64, root_path: PathBuf) -> Tree {
         for child in &dir.children {
             if let Some(sub) = &child.dir {
                 measure(sub, nodes, names);
-            }
-        }
-    }
-
-    fn place(dir: Dir, id: NodeId, tree: &mut Tree) {
-        let Dir { names, children, .. } = dir;
-        let mut start = 0;
-        let mut children: Vec<(u32, Child)> = children
-            .into_iter()
-            .map(|child| (std::mem::replace(&mut start, child.name_end), child))
-            .collect();
-        children.sort_unstable_by_key(|(_, child)| std::cmp::Reverse(child.size));
-
-        let first_id = tree.slots.len() as NodeId;
-        let slot = &mut tree.slots[id as usize];
-        slot.first = tree.kids.len() as u32;
-        slot.count = children.len() as u32;
-        for (i, (start, child)) in children.iter().enumerate() {
-            let text = &names[*start as usize..child.name_end as usize];
-            tree.slots.push(Slot {
-                size: child.size,
-                items: child.items(),
-                name: tree.names.len() as u32,
-                name_len: text.len() as u16,
-                parent: id,
-                first: 0,
-                count: 0,
-                modified: child.modified,
-                kind: if child.dir.is_some() { NodeKind::Dir } else { NodeKind::File },
-            });
-            tree.names.push_str(text);
-            tree.kids.push(first_id + i as NodeId);
-        }
-        drop(names);
-        for (i, (_, child)) in children.into_iter().enumerate() {
-            if let Some(sub) = child.dir {
-                place(*sub, first_id + i as NodeId, tree);
             }
         }
     }
@@ -925,5 +1144,48 @@ mod tests {
         assert_eq!(read.path(a), dir.join("a"));
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn catches_up_with_changes() {
+        let dir = std::env::temp_dir().join(format!("burrdisk-relist-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("a/b")).unwrap();
+        fs::write(dir.join("a/b/big"), vec![1u8; 200_000]).unwrap();
+        fs::write(dir.join("a/gone"), vec![1u8; 30_000]).unwrap();
+        fs::write(dir.join("top"), vec![1u8; 50_000]).unwrap();
+        let mut tree = scan(&dir, "test", &Progress::default()).unwrap();
+        let a = tree.deepest(&dir.join("a/new/x")).unwrap();
+        let b = tree.deepest(&dir.join("a/b")).unwrap();
+        assert_eq!(tree.path(a), dir.join("a"));
+
+        fs::write(dir.join("a/b/big"), vec![1u8; 400_000]).unwrap();
+        fs::remove_file(dir.join("a/gone")).unwrap();
+        fs::create_dir_all(dir.join("a/new/deeper")).unwrap();
+        fs::write(dir.join("a/new/deeper/file"), vec![1u8; 70_000]).unwrap();
+        for id in [b, a] {
+            let relisted = relist(&dir, &tree.path(id), id, &tree.subfolders(id)).unwrap();
+            assert!(tree.apply(relisted));
+        }
+
+        let fresh = scan(&dir, "test", &Progress::default()).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        let sizes = |t: &Tree, id: NodeId| {
+            let mut out: Vec<(String, u64, u64)> =
+                t.node(id).children.iter().map(|c| (t.node(*c).name.to_string(), t.node(*c).size, t.node(*c).items)).collect();
+            out.sort();
+            out
+        };
+        assert_eq!(tree.node(Tree::ROOT).size, fresh.node(Tree::ROOT).size);
+        assert_eq!(tree.node(Tree::ROOT).items, fresh.node(Tree::ROOT).items);
+        assert_eq!(sizes(&tree, a), sizes(&fresh, fresh.node(Tree::ROOT).children[0]));
+        // What was already there keeps its id, and the new folder is walked whole
+        assert_eq!(tree.deepest(&dir.join("a/b")), Some(b));
+        let deeper = tree.deepest(&dir.join("a/new/deeper")).unwrap();
+        assert_eq!(tree.path(deeper), dir.join("a/new/deeper"));
+        assert!(tree.node(deeper).size >= 70_000);
+        // Nothing changed, so nothing to do
+        let relisted = relist(&dir, &dir, Tree::ROOT, &tree.subfolders(Tree::ROOT));
+        assert!(relisted.is_none());
     }
 }

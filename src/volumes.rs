@@ -11,7 +11,7 @@ pub enum VolumeKind {
     DiskImage,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Volume {
     pub name: String,
     pub mount: PathBuf,

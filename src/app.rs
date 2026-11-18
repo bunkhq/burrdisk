@@ -185,7 +185,20 @@ pub struct Explorer {
     /// What grew since an earlier scan of the same folder or disk, once loaded
     pub growth: Option<Rc<crate::history::Growth>>,
     _history: Option<Task<()>>,
+    /// Keeps the tree up to date with changes made outside Burrdisk
+    _live: Option<Live>,
 }
+
+/// Watches what was scanned for changes. Each change marks the folder it happened in,
+/// and every `LIVE_EVERY` the marked folders are listed again and the tree updated
+struct Live {
+    _watcher: notify::RecommendedWatcher,
+    _task: Task<()>,
+}
+
+const LIVE_EVERY: Duration = Duration::from_millis(1500);
+/// How often the disk list and free space are read again
+const VOLUMES_EVERY: Duration = Duration::from_secs(4);
 
 /// Comparing file contents for the `is:dup` search, which starts the first time a
 /// search asks for duplicates and covers the whole scan
@@ -388,6 +401,8 @@ impl Burrdisk {
         // Coming back from System Settings is the moment access may have changed
         this._activation = Some(cx.observe_window_activation(window, |this, window, cx| {
             if window.is_window_active() {
+                // Space may have changed while Burrdisk was in the background
+                this.refresh_volumes(cx);
                 let granted = volumes::has_full_disk_access();
                 if granted != this.full_disk_access {
                     this.full_disk_access = granted;
@@ -396,6 +411,20 @@ impl Burrdisk {
             }
         }));
         this.refresh_volumes(cx);
+        // Disks come and go, and fill up, while Burrdisk is open
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(VOLUMES_EVERY).await;
+                let Ok(()) = this.update(cx, |this, cx| {
+                    if matches!(this.screen, Screen::Home | Screen::Explorer(_)) {
+                        this.refresh_volumes(cx);
+                    }
+                }) else {
+                    return;
+                };
+            }
+        })
+        .detach();
         this.start_update_checks(cx);
         if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
             this.open_path(path, cx);
@@ -432,6 +461,15 @@ impl Burrdisk {
         self._refresh = Some(cx.spawn(async move |this, cx| {
             let volumes = list.await;
             this.update(cx, |this, cx| {
+                if this.volumes_loaded && this.volumes == volumes {
+                    return;
+                }
+                if let Some(explorer) = this.explorer()
+                    && let Some(volume) = &explorer.target.volume
+                    && let Some(now) = volumes.iter().find(|v| v.mount == volume.mount)
+                {
+                    explorer.target.volume = Some(now.clone());
+                }
                 this.volumes = volumes;
                 this.volumes_loaded = true;
                 cx.notify();
@@ -656,13 +694,96 @@ impl Burrdisk {
             dupes: None,
             growth: None,
             _history: None,
+            _live: None,
         });
         let mode = self.chart_mode;
         if let Some(explorer) = self.explorer() {
             explorer.set_mode(mode);
         }
         self.load_history(cx);
+        self.go_live(cx);
         cx.notify();
+    }
+
+    /// Starts watching the explorer's folder or disk for changes made elsewhere
+    fn go_live(&mut self, cx: &mut Context<Self>) {
+        use notify::Watcher;
+        let Some(explorer) = self.explorer() else { return };
+        let marked: Arc<std::sync::Mutex<std::collections::HashSet<PathBuf>>> = Arc::default();
+        let handler = {
+            let marked = marked.clone();
+            move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else { return };
+                if event.kind.is_access() {
+                    return;
+                }
+                let mut marked = marked.lock().unwrap();
+                for path in event.paths {
+                    // What changed is listed in the folder that holds it
+                    if let Some(parent) = path.parent() {
+                        marked.insert(parent.to_path_buf());
+                    }
+                }
+            }
+        };
+        let Ok(mut watcher) = notify::recommended_watcher(handler) else { return };
+        if watcher.watch(&explorer.target.path, notify::RecursiveMode::Recursive).is_err() {
+            return;
+        }
+        let root = explorer.target.path.clone();
+        // The task ends with the explorer, which drops it
+        let task = cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(LIVE_EVERY).await;
+                let paths: Vec<PathBuf> = std::mem::take(&mut *marked.lock().unwrap()).into_iter().collect();
+                if paths.is_empty() {
+                    continue;
+                }
+                // Folders to list again, each with the subfolders it already has
+                let Ok(jobs) = this.update(cx, |this, _| {
+                    let Some(explorer) = this.explorer() else { return Vec::new() };
+                    if explorer.busy() {
+                        marked.lock().unwrap().extend(paths);
+                        return Vec::new();
+                    }
+                    let mut ids: Vec<NodeId> = paths.iter().filter_map(|p| explorer.tree.deepest(p)).collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    ids.into_iter().map(|id| (id, explorer.tree.path(id), explorer.tree.subfolders(id))).collect()
+                }) else {
+                    return;
+                };
+                if jobs.is_empty() {
+                    continue;
+                }
+                let root = root.clone();
+                let relisted = cx
+                    .background_executor()
+                    .spawn(async move {
+                        jobs.into_iter()
+                            .filter_map(|(id, path, known)| scan::relist(&root, &path, id, &known))
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
+                let applied = this.update(cx, |this, cx| {
+                    let Some(explorer) = this.explorer() else { return };
+                    let mut changed = false;
+                    for relisted in relisted {
+                        changed |= explorer.tree.apply(relisted);
+                    }
+                    if changed {
+                        explorer.caught_up();
+                        cx.notify();
+                    }
+                });
+                if applied.is_err() {
+                    return;
+                }
+            }
+        });
+        if let Some(explorer) = self.explorer() {
+            explorer._live = Some(Live { _watcher: watcher, _task: task });
+        }
     }
 
     /// Finds the earlier scan to compare with and what grew since, in the background
@@ -1422,6 +1543,45 @@ impl Explorer {
                 }
             }
         }
+    }
+
+    /// Whether something under way would be upset by the tree changing under it
+    fn busy(&self) -> bool {
+        self.countdown.is_some()
+            || self.trash_job.is_some()
+            || self.trashing
+            || self.zoom.is_some()
+            || self.pressing
+            || self.shelf_drag.is_some()
+            || self.context.is_some()
+    }
+
+    /// After the tree caught up with changes made elsewhere: lets go of anything that
+    /// no longer exists and redraws
+    fn caught_up(&mut self) {
+        let tree = &self.tree;
+        let attached = |id: &NodeId| tree.is_attached(*id);
+        if !attached(&self.focus) {
+            // The nearest folder up that still exists
+            let mut cursor = Some(self.focus);
+            while let Some(id) = cursor.filter(|id| !attached(id)) {
+                cursor = tree.node(id).parent;
+            }
+            self.focus = cursor.unwrap_or(Tree::ROOT);
+        }
+        if !attached(&self.trail) || !tree.is_ancestor(self.focus, self.trail) {
+            self.trail = self.focus;
+        }
+        self.collected.retain(attached);
+        self.pinned = self.pinned.filter(attached);
+        self.preview = self.preview.filter(attached);
+        if let Some(Hover::Target(Target::Node(id) | Target::Smaller(id))) = self.hover
+            && !attached(&id)
+        {
+            self.hover = None;
+            self.prev_hover = None;
+        }
+        self.relayout();
     }
 
     /// While the `is:dup` search compares contents: bytes read and to read, the
