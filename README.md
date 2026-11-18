@@ -105,9 +105,22 @@ Burrdisk has no accounts, analytics or telemetry. Scan results stay on your comp
 | `↑`, `↓` | `↑`, `↓` | Select the previous or next item in the list |
 | `Return`, `→` | `Enter`, `→` | Open the selected item; `←` goes back |
 | `⌘⌫` | `Ctrl+Backspace` | Move the hovered item to the Collector |
+| `⌘E` | `Ctrl+E` | Export the list as CSV |
 | `⌘Q` | `Alt+F4` | Quit |
 
 The mouse's back and forward buttons step back and forward like the arrows in the title bar.
+
+## Command line
+
+`burrdisk --list <path>` scans a folder or disk without opening the window and prints what's inside it, largest first. `--find` takes the same queries as the search field, `--limit` caps the list (50 by default), and `--csv` prints every item as CSV, as the **Export** button in the sidebar does.
+
+```sh
+burrdisk --list ~/Library --limit 20
+burrdisk --list D:\ --find ".mov >1gb >1y"
+burrdisk --list ~ --find "is:dup" --csv > copies.csv
+```
+
+The command is `/Applications/Burrdisk.app/Contents/MacOS/burrdisk` on macOS and `Burrdisk.exe` in the install folder on Windows. Burrdisk is a windowed app on Windows, so PowerShell and Command Prompt don't wait for it to finish: pipe or redirect its output, e.g. `& "$env:LOCALAPPDATA\Programs\Burrdisk\Burrdisk.exe" --list C:\ | Out-Host`.
 
 ## Build from source
 

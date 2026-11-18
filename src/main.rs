@@ -4,7 +4,9 @@
 mod app;
 mod appicon;
 mod assets;
+mod cli;
 mod dupes;
+mod export;
 mod filetype;
 mod format;
 mod history;
@@ -25,14 +27,17 @@ use gpui::{
 use ui::px;
 
 use app::{
-    Burrdisk, CheckForUpdates, ClearSearch, Collect, FindItems, GoBack, GoForward, GoUp, OpenSelected, Preview, Quit,
-    SelectNext, SelectPrevious,
+    Burrdisk, CheckForUpdates, ClearSearch, Collect, ExportList, FindItems, GoBack, GoForward, GoUp, OpenSelected, Preview,
+    Quit, SelectNext, SelectPrevious,
 };
 
 fn main() -> std::process::ExitCode {
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     if args.first().is_some_and(|a| a == "--scan-helper") {
         return scan::run_helper(&args[1..]);
+    }
+    if let Some(code) = cli::run(&args) {
+        return code;
     }
     Application::new()
         .with_assets(assets::Assets)
@@ -42,6 +47,7 @@ fn main() -> std::process::ExitCode {
                 KeyBinding::new("escape", GoUp, Some("!searching")),
                 KeyBinding::new("escape", ClearSearch, Some("searching")),
                 KeyBinding::new("secondary-f", FindItems, None),
+                KeyBinding::new("secondary-e", ExportList, None),
                 KeyBinding::new("secondary-[", GoBack, None),
                 KeyBinding::new("secondary-]", GoForward, None),
                 KeyBinding::new("secondary-backspace", Collect, None),

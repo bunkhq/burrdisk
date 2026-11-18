@@ -20,7 +20,21 @@ use crate::volumes::{self, Volume};
 
 actions!(
     burrdisk,
-    [GoUp, GoBack, GoForward, Preview, Collect, Quit, CheckForUpdates, FindItems, ClearSearch, SelectNext, SelectPrevious, OpenSelected]
+    [
+        GoUp,
+        GoBack,
+        GoForward,
+        Preview,
+        Collect,
+        Quit,
+        CheckForUpdates,
+        FindItems,
+        ClearSearch,
+        SelectNext,
+        SelectPrevious,
+        OpenSelected,
+        ExportList
+    ]
 );
 
 #[derive(Clone)]
@@ -1076,6 +1090,44 @@ impl Burrdisk {
         }
     }
 
+    /// Saves what the sidebar lists as CSV, after asking where: the folder in focus's
+    /// contents, or every search result, not just those shown
+    pub fn export_list(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        let results = explorer.search.as_ref().and_then(|s| s.results.clone());
+        let ids: Vec<NodeId> = match &results {
+            Some(results) => results.matches.clone(),
+            None => explorer.tree.node(explorer.focus).children.to_vec(),
+        };
+        let text = crate::export::csv(&explorer.tree, &ids, results.as_deref());
+        let folder: String = explorer
+            .tree
+            .node(explorer.focus)
+            .name
+            .chars()
+            .map(|c| if "<>:\"/\\|?*".contains(c) { '_' } else { c })
+            .collect();
+        let folder = folder.trim_matches(['_', ' ', '.']);
+        let name = format!("{}.csv", if folder.is_empty() { "Burrdisk" } else { folder });
+        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from);
+        let dir = home.map(|h| h.join("Downloads")).filter(|d| d.is_dir()).unwrap_or_else(std::env::temp_dir);
+        let picked = cx.prompt_for_new_path(&dir, Some(&name));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(path))) = picked.await else { return };
+            let written = {
+                let path = path.clone();
+                cx.background_executor().spawn(async move { std::fs::write(&path, text) }).await
+            };
+            let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().to_string());
+            this.update(cx, |this, cx| match written {
+                Ok(()) => this.show_notice(format!("Saved the list as {name}"), false, cx),
+                Err(error) => this.show_notice(format!("Couldn\u{2019}t save the list: {error}"), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     /// Compares the contents of the scan's files in the background, for `is:dup`
     fn compare_files(&mut self, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer() else { return };
@@ -1875,6 +1927,7 @@ impl Render for Burrdisk {
             .on_action(cx.listener(Self::on_select_next))
             .on_action(cx.listener(Self::on_select_previous))
             .on_action(cx.listener(Self::on_open_selected))
+            .on_action(cx.listener(|this, _: &ExportList, _, cx| this.export_list(cx)))
             // A folder dropped anywhere on the window is scanned, unless a scan or a
             // move to the Trash is under way
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {

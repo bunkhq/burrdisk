@@ -234,6 +234,30 @@ pub fn icon_label_button(
     styled_button(id, Some(glyph), label.into(), style, on_click)
 }
 
+/// A short label that shows beside a control after hovering it a moment
+pub struct Tooltip(SharedString);
+
+impl Render for Tooltip {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded(px(6.))
+            .bg(theme::raised())
+            .border_1()
+            .border_color(theme::border())
+            .text_xs()
+            .text_color(theme::text_muted())
+            .font_family("Mona Sans")
+            .child(self.0.clone())
+    }
+}
+
+pub fn tooltip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> gpui::AnyView {
+    let text = text.into();
+    move |_, cx| cx.new(|_| Tooltip(text.clone())).into()
+}
+
 pub fn icon_button(
     id: impl Into<ElementId>,
     glyph: Icon,

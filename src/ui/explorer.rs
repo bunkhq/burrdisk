@@ -25,7 +25,7 @@ use crate::sunburst::{self, Geometry, Hit, PaintState, Segment, Target, View};
 use crate::theme;
 use crate::ui::components::{
     ButtonStyle, Icon, MenuItem, amount, button, context_menu, glow, icon, icon_button, icon_label_button, shadow,
-    window_controls,
+    tooltip, window_controls,
 };
 use crate::ui::fx;
 use crate::volumes;
@@ -1728,6 +1728,15 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                                     .size(px(24.)),
                             )
                         })
+                        .child(
+                            icon_button("export-list", Icon::Download, cx.listener(|this, _, _, cx| this.export_list(cx)))
+                                .tooltip(tooltip(if cfg!(target_os = "macos") {
+                                    "Export list as CSV  \u{2318}E"
+                                } else {
+                                    "Export list as CSV  Ctrl+E"
+                                }))
+                                .size(px(24.)),
+                        )
                         .when(collectable > 0, |s| {
                             let label = if for_dupes {
                                 "Collect extra copies".to_string()
