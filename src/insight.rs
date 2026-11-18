@@ -189,6 +189,7 @@ const RULES: &[Rule] = &[
         note("Device backups", "Backups of your iPhone and iPad", Review),
         "Manage them in Finder: select the device, then Manage Backups",
     )),
+    rule(Os::Mac, &["itunes", "iphone software updates"], DIR, note("iPhone updates", "iOS updates downloaded to install on an iPhone or iPad. They download again when needed", Safe)),
     rule(Os::Mac, &["mail downloads"], DIR, note("Mail attachments", "Attachments you opened in Mail. The originals stay in your mail", Safe)),
     rule(Os::Mac, &["caches", "homebrew"], DIR, act(
         note("Download cache", "Homebrew's downloads and old versions", Safe),
@@ -259,6 +260,32 @@ const RULES: &[Rule] = &[
     rule(Os::Windows, &["appdata", "local", "temp"], DIR, note("Temporary files", "Files apps left behind while they worked. Files still in use can't be moved and stay put", Safe)),
     rule(Os::Windows, &["windows", "temp"], DIR, note("Temporary files", "Files Windows and installers left behind. Files still in use can't be moved and stay put", Safe)),
     rule(Os::Windows, &["crashdumps"], DIR, note("Crash reports", "Memory dumps saved when apps crashed", Safe)),
+    rule(Os::Windows, &["windows", "memory.dmp"], FILE, note("Crash dump", "Memory Windows saved when it last crashed", Safe)),
+    rule(Os::Windows, &["windows", "minidump"], DIR, note("Crash dumps", "Small memory dumps Windows saved when it crashed", Safe)),
+    rule(Os::Windows, &["windows", "livekernelreports"], DIR, act(
+        how(
+            note("Crash reports", "Reports Windows saved when a driver or the system stalled", Elsewhere),
+            "Disk Cleanup clears them: Clean up system files, then System error memory dump files",
+        ),
+        Action::Launch("cleanmgr.exe"),
+    )),
+    rule(Os::Windows, &["user data", "default", "cache"], DIR, note("Browser cache", "Pages and images a browser saved to load sites faster, for Chrome, Edge, Brave and others. It fills again as you browse", Safe)),
+    rule(Os::Windows, &["appdata", "local", "npm-cache"], DIR, note("npm cache", "Packages npm downloaded before. It downloads them again when a project needs them", Safe)),
+    rule(Os::Windows, &["nvidia", "dxcache"], DIR, note("Shader cache", "Graphics shaders the NVIDIA driver built for games. Games build them again as they run", Safe)),
+    at_root(rule(Os::Windows, &["$windows.~bt"], DIR, act(
+        how(
+            note("Upgrade files", "Files left from installing a Windows upgrade", Elsewhere),
+            "Remove them in Settings, under Storage, then Temporary files",
+        ),
+        Action::Open("ms-settings:storagesense"),
+    ))),
+    at_root(rule(Os::Windows, &["$windows.~ws"], DIR, act(
+        how(
+            note("Upgrade files", "Files left from downloading a Windows upgrade", Elsewhere),
+            "Remove them in Settings, under Storage, then Temporary files",
+        ),
+        Action::Open("ms-settings:storagesense"),
+    ))),
     rule(Os::Windows, &["ext4.vhdx"], FILE, how(
         note("Linux disk", "A WSL distribution's whole disk. It grows but never shrinks by itself", Elsewhere),
         "Delete files inside Linux, run wsl --shutdown, then compact it with Optimize-VHD or diskpart's compact vdisk",
