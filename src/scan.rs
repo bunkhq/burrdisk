@@ -126,9 +126,15 @@ impl Tree {
 
     /// Whether a node is still reachable from the root. It isn't once it, or any
     /// folder it was in, is removed
-    pub fn is_attached(&self, id: NodeId) -> bool {
-        let lineage = self.lineage(id);
-        lineage[0] == Self::ROOT && lineage.windows(2).all(|w| self.node(w[0]).children.contains(&w[1]))
+    pub fn is_attached(&self, mut id: NodeId) -> bool {
+        // Detaching a node cuts its link to its parent, so the way up from a detached
+        // node ends short of the root
+        loop {
+            match self.slots[id as usize].parent {
+                NO_PARENT => return id == Self::ROOT,
+                parent => id = parent,
+            }
+        }
     }
 
     /// Detaches a node after its files were deleted, shrinking every ancestor
