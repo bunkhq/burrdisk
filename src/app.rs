@@ -932,7 +932,12 @@ impl Burrdisk {
         }
         if searching && keystroke.key == "backspace" && !m.secondary() {
             let mut text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
-            text.pop();
+            // The suggestions chip goes in one press, as it reads as one thing
+            if text.ends_with(crate::search::SAFE) {
+                text.truncate(text.len() - crate::search::SAFE.len());
+            } else {
+                text.pop();
+            }
             explorer.set_search_text(text);
             cx.notify();
             return;
@@ -951,7 +956,12 @@ impl Burrdisk {
         if !searching && !starts {
             return;
         }
-        let text = format!("{}{typed}", explorer.search.as_ref().map_or("", |s| s.text.as_str()));
+        let mut text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+        // Words typed after the suggestions chip are words of their own
+        if text.ends_with(crate::search::SAFE) && typed != " " {
+            text.push(' ');
+        }
+        text.push_str(typed);
         explorer.set_search_text(text);
         cx.notify();
     }

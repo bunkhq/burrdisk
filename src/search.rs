@@ -6,6 +6,8 @@
 //! - `>500mb`, `<1gb` (also `> 1 GB`) match by size on disk; sizes alone match files only
 //! - `>1y`, `>6mo`, `<2w`, `>30d` (also `> 1 year`) match by how long ago an item last
 //!   changed, a folder by the newest change inside it
+//! - `is:safe` matches what's safe to move to the Trash: caches, build output,
+//!   dependencies of projects not touched in two weeks
 //!
 //! Results are the outermost matches: a matching folder stands for everything in it
 
@@ -27,7 +29,12 @@ pub struct Query {
     older_than: Option<u32>,
     /// Changed within this many seconds
     newer_than: Option<u32>,
+    /// Only what Burrdisk suggests clearing
+    safe: bool,
 }
+
+/// The query for suggestions
+pub const SAFE: &str = "is:safe";
 
 enum Unit {
     Bytes(u64),
@@ -95,6 +102,8 @@ impl Query {
                         if greater { query.older_than = Some(secs) } else { query.newer_than = Some(secs) }
                     }
                 }
+            } else if token == SAFE {
+                query.safe = true;
             } else if let Some(ext) = token.strip_prefix("*.").or_else(|| token.strip_prefix('.')).filter(|e| !e.is_empty()) {
                 query.exts.push(format!(".{ext}"));
             } else if token != ">" && token != "<" {
@@ -115,6 +124,7 @@ impl Query {
             && self.exts.is_empty()
             && self.older_than.is_none()
             && self.newer_than.is_none()
+            && !self.safe
     }
 
     fn matches(&self, tree: &Tree, id: NodeId, now: u32) -> bool {
@@ -137,7 +147,10 @@ impl Query {
         if !self.exts.is_empty() && !self.exts.iter().any(|e| ends_with_ci(node.name, e)) {
             return false;
         }
-        self.words.iter().all(|w| contains_ci(node.name, w))
+        if !self.words.iter().all(|w| contains_ci(node.name, w)) {
+            return false;
+        }
+        !self.safe || crate::insight::suggested(tree, id, now)
     }
 }
 
@@ -261,6 +274,10 @@ mod tests {
         // A size alone finds files, not the folders around them
         let r = run(&tree, Tree::ROOT, &Query::parse(">100kb"), now);
         assert_eq!(names(&r), vec!["Trip.MP4"]);
+
+        // Fresh dependencies belong to a project in use, so they aren't suggested
+        assert!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now).matches.is_empty());
+        assert_eq!(run(&tree, Tree::ROOT, &Query::parse(SAFE), now + 30 * DAY).matches.len(), 1);
 
         // Everything was just written, so nothing is a year old
         assert!(run(&tree, Tree::ROOT, &Query::parse(">1y"), now).matches.is_empty());

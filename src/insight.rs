@@ -62,7 +62,13 @@ pub struct Insight {
     /// How to clear it, when there's more to say than the verdict
     pub how: Option<&'static str>,
     pub action: Option<Action>,
+    /// Belongs to a project, so suggestions skip it while the project is in use
+    pub project: bool,
 }
+
+/// How recently a project's build output or dependencies changed for suggestions to
+/// leave them be
+pub const IN_USE: u32 = 14 * 86_400;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Os {
@@ -102,7 +108,12 @@ const DIR: Option<NodeKind> = Some(NodeKind::Dir);
 const FILE: Option<NodeKind> = Some(NodeKind::File);
 
 const fn note(tag: &'static str, about: &'static str, verdict: Verdict) -> Insight {
-    Insight { tag, about, verdict, how: None, action: None }
+    Insight { tag, about, verdict, how: None, action: None, project: false }
+}
+
+const fn project(mut insight: Insight) -> Insight {
+    insight.project = true;
+    insight
 }
 
 const fn how(mut insight: Insight, how: &'static str) -> Insight {
@@ -130,18 +141,18 @@ use Verdict::*;
 /// Checked in order; the first match wins, so specific paths come before general ones
 const RULES: &[Rule] = &[
     // Developer folders, on every platform
-    rule(Os::Any, &["node_modules"], DIR, how(
+    rule(Os::Any, &["node_modules"], DIR, project(how(
         note("Dependencies", "Packages installed for a JavaScript project", Safe),
         "Your package manager installs them again from the project's package.json",
-    )),
-    beside(rule(Os::Any, &["target"], DIR, how(
+    ))),
+    beside(rule(Os::Any, &["target"], DIR, project(how(
         note("Build output", "What Cargo compiled for a Rust project", Safe),
         "cargo build makes it again",
-    )), "cargo.toml"),
-    beside(rule(Os::Any, &[".next"], DIR, how(
+    ))), "cargo.toml"),
+    beside(rule(Os::Any, &[".next"], DIR, project(how(
         note("Build output", "Next.js build files and cache", Safe),
         "The next build makes it again",
-    )), "package.json"),
+    ))), "package.json"),
     rule(Os::Any, &["__pycache__"], DIR, note("Bytecode cache", "Compiled Python files. Python makes them again when it needs them", Safe)),
     rule(Os::Any, &[".gradle"], DIR, note("Build cache", "Gradle's downloads and build cache. Gradle fetches what it needs again", Safe)),
     rule(Os::Any, &[".npm", "_cacache"], DIR, act(
@@ -154,10 +165,10 @@ const RULES: &[Rule] = &[
         "Uninstall games in Steam, so it knows they're gone",
     )),
     // macOS
-    rule(Os::Mac, &["developer", "xcode", "deriveddata"], DIR, how(
+    rule(Os::Mac, &["developer", "xcode", "deriveddata"], DIR, project(how(
         note("Xcode build data", "Indexes and build products for your Xcode projects", Safe),
         "Xcode makes it again on the next build",
-    )),
+    ))),
     rule(Os::Mac, &["developer", "xcode", "ios devicesupport"], DIR, how(
         note("Device support", "Debug symbols for each iOS version you've connected", Safe),
         "Xcode copies them again when you connect a device",
@@ -326,6 +337,23 @@ pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
                 })
         })
         .map(|rule| rule.insight)
+}
+
+/// Whether an item's name is one a rule ends with, so it may have a note. Much
+/// cheaper than [`explain`], for checking every item in a scan
+pub fn candidate(name: &str) -> bool {
+    RULES
+        .iter()
+        .any(|rule| rule.os.here() && rule.path.last().is_some_and(|last| name.eq_ignore_ascii_case(last)))
+}
+
+/// Whether an item is a suggestion: safe to move to the Trash, and not part of a
+/// project changed in the last two weeks
+pub fn suggested(tree: &Tree, id: NodeId, now: u32) -> bool {
+    candidate(tree.node(id).name)
+        && explain(tree, id).is_some_and(|note| {
+            note.verdict == Safe && !(note.project && now.saturating_sub(tree.node(id).modified) < IN_USE)
+        })
 }
 
 /// Whether the Collector should refuse an item, because the system needs it

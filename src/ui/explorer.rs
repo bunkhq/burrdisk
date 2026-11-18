@@ -1344,7 +1344,11 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
     let text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
     let t = fx::hover("search-field");
     let folder = explorer.tree.node(explorer.focus).name.to_string();
-    let shortcut = if cfg!(target_os = "macos") { "\u{2318}F" } else { "Ctrl+F" };
+    // The suggestions query reads as a chip, not as its syntax
+    let (safe, text) = match text.strip_prefix(search::SAFE) {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, text),
+    };
     let caret = div()
         .flex_none()
         .w(px(1.5))
@@ -1386,9 +1390,10 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
                 .items_center()
                 .text_size(px(13.5))
                 .overflow_hidden()
+                .when(safe, |s| s.child(safe_chip().mr(px(2.))))
                 .when(!text.is_empty(), |s| s.child(div().flex_none().whitespace_nowrap().child(text.clone())))
                 .when(open, |s| s.child(caret))
-                .when(text.is_empty(), |s| {
+                .when(text.is_empty() && !safe, |s| {
                     s.child(
                         div()
                             .ml(px(if open { 4. } else { 0. }))
@@ -1400,9 +1405,7 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
                     )
                 }),
         )
-        .when(!open, |s| {
-            s.child(div().flex_none().pr_1p5().text_xs().text_color(fx::mix(theme::border_strong(), theme::text_faint(), t)).child(shortcut))
-        })
+        .when(!open, |s| s.child(safe_button(cx)))
         .when(open, |s| {
             s.child(
                 icon_button(
@@ -1420,8 +1423,59 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
         })
 }
 
-/// Shown under the field while it's open and empty: what a query can say
-fn search_hint() -> impl IntoElement {
+/// "Safe to clear", as the field shows the suggestions query
+fn safe_chip() -> gpui::Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .h(px(22.))
+        .px_1p5()
+        .rounded(px(6.))
+        .bg(theme::accent_soft())
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(theme::accent_hi())
+        .child(icon(Icon::Check, 12.0, theme::accent_hi()))
+        .child("Safe to clear")
+}
+
+/// The way into suggestions, in the field's right end while it's closed
+fn safe_button(cx: &mut Context<Burrdisk>) -> impl IntoElement {
+    let t = fx::hover("safe-button");
+    div()
+        .id("safe-button")
+        .on_hover(fx::on_hover("safe-button"))
+        .on_mouse_move(fx::on_move)
+        .relative()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap_1()
+        .h(px(24.))
+        .px_2()
+        .rounded(px(7.))
+        .bg(fx::mix(gpui::transparent_black(), theme::accent_soft(), t))
+        .cursor_pointer()
+        .text_xs()
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(fx::mix(theme::accent_hi(), theme::accent(), t * 0.5))
+        .child(fx::shine(t, gpui::white().opacity(0.2), px(7.)))
+        .child(icon(Icon::Check, 12.0, theme::accent_hi()))
+        .child("Safe to clear")
+        .on_click(cx.listener(|this, _, _, cx| {
+            cx.stop_propagation();
+            if let Some(explorer) = this.explorer() {
+                explorer.set_search_text(search::SAFE.to_string());
+                cx.notify();
+            }
+        }))
+}
+
+/// Shown under the field while it's open and empty: what a query can say. Each
+/// example runs when clicked
+fn search_hint(cx: &mut Context<Burrdisk>) -> impl IntoElement {
     div()
         .flex()
         .flex_wrap()
@@ -1433,8 +1487,24 @@ fn search_hint() -> impl IntoElement {
         .text_xs()
         .text_color(theme::text_faint())
         .child("Try")
-        .children(["node_modules", ".mov", ">1gb", ">1y"].into_iter().map(|example| {
-            div().px_1p5().rounded(px(6.)).bg(theme::track()).text_color(theme::text_muted()).child(example)
+        .children(["node_modules", ".mov", ">1gb", ">1y"].into_iter().enumerate().map(|(ix, example)| {
+            let key = ("example", ix);
+            let t = fx::hover(key);
+            div()
+                .id(key)
+                .on_hover(fx::on_hover(key))
+                .px_1p5()
+                .rounded(px(6.))
+                .bg(fx::mix(theme::track(), theme::raised(), t))
+                .text_color(fx::mix(theme::text_muted(), theme::text(), t))
+                .cursor_pointer()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if let Some(explorer) = this.explorer() {
+                        explorer.set_search_text(example.to_string());
+                        cx.notify();
+                    }
+                }))
+                .child(example)
         }))
         .with_animation(
             "search-hint",
@@ -1541,7 +1611,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         .bg(theme::surface())
         .child(resize_edge())
         .child(search_field(explorer, cx))
-        .when(searching && results.is_none(), |s| s.child(search_hint()))
+        .when(searching && results.is_none(), |s| s.child(search_hint(cx)))
         .child(
             div()
                 .flex()
