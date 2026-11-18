@@ -32,6 +32,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "corner-up-left",
     "disc",
     "download",
+    "eye",
     "file",
     "file-text",
     "folder",
@@ -41,6 +42,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "image",
     "inbox",
     "loader-circle",
+    "lock",
     "music",
     "network",
     "plus",
@@ -49,7 +51,9 @@ const ICONS: &[(&str, &[u8])] = icons![
     "search",
     "shield-alert",
     "shield-check",
+    "timer",
     "trash",
+    "trending-down",
     "trending-up",
     "usb",
     "video",
@@ -57,6 +61,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "window-maximize",
     "window-minimize",
     "window-restore",
+    "wrench",
     "x",
 ];
 

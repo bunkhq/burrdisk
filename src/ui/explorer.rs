@@ -1670,28 +1670,42 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         .is_some_and(|f| f != Tree::ROOT && !explorer.is_collected(f) && !insight::protected(&explorer.tree, f));
     let reveal_path = folder.map(|f| explorer.tree.path(f));
 
-    let footer = at_root.then(|| {
-        div()
-            .flex()
-            .flex_col()
-            .gap_1p5()
-            .px_5()
-            .py_4()
-            .border_t_1()
-            .border_color(theme::border())
-            .when_some(explorer.target.volume.clone(), |s, volume| {
-                s.child(footer_row("Available", format::bytes(volume.available)))
-                    .when(volume.purgeable() > 0, |s| {
-                        s.child(footer_row("Purgeable", format::bytes(volume.purgeable())))
-                    })
-                    .child(footer_row("Capacity", format::bytes(volume.total)))
-            })
-            .when_some(explorer.growth.as_ref(), |s, growth| {
-                let sign = if growth.total < 0 { "\u{2212}" } else { "+" };
-                let label = crate::history::since(growth.since, format::unix_now());
-                s.child(footer_row(label, format!("{sign}{}", format::bytes(growth.total.unsigned_abs()))))
-            })
-            .child(footer_row("Scan time", format::duration(explorer.tree.duration)))
+    // At the scan's top: free space, the change since the last scan and how long the
+    // scan took, as one line under the header
+    let stats = at_root.then(|| {
+        let mut items = Vec::new();
+        if let Some(volume) = &explorer.target.volume {
+            let purgeable = volume.purgeable();
+            items.push(stat(
+                "stat-space",
+                Icon::HardDrive,
+                format::bytes(volume.available),
+                format!("free of {}", format::bytes(volume.total)),
+                (purgeable > 0).then(|| format!("Includes {} macOS can purge when space runs low", format::bytes(purgeable))),
+            ));
+        }
+        if let Some(growth) = &explorer.growth {
+            let (glyph, sign) = if growth.total < 0 { (Icon::TrendingDown, "\u{2212}") } else { (Icon::TrendingUp, "+") };
+            let now = format::unix_now();
+            items.push(stat(
+                "stat-growth",
+                glyph,
+                format!("{sign}{}", format::bytes(growth.total.unsigned_abs())),
+                crate::history::since(growth.since, now).to_lowercase(),
+                Some(format!(
+                    "Compared with your scan from {}",
+                    format::ago(growth.since, now).unwrap_or_default().to_lowercase()
+                )),
+            ));
+        }
+        items.push(stat(
+            "stat-time",
+            Icon::Timer,
+            format::duration(explorer.tree.duration),
+            "to scan".to_string(),
+            None,
+        ));
+        items
     });
 
     // Without Full Disk Access, macOS hides whole app libraries from the scan
@@ -1818,7 +1832,10 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                         .overflow_hidden()
                         .bg(theme::track())
                         .children(strip),
-                ),
+                )
+                .when_some(stats, |s, items| {
+                    s.child(div().flex().flex_wrap().gap_x_4().gap_y_1().mt(px(10.)).children(items))
+                }),
         )
         .children(
             explorer
@@ -1861,7 +1878,23 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                     )
                 }),
         )
-        .children(footer)
+}
+
+/// One figure in the line of stats under the header: a glyph, the value, then what
+/// it is, with more on hover
+fn stat(id: &'static str, glyph: Icon, value: String, what: String, more: Option<String>) -> AnyElement {
+    div()
+        .id(id)
+        .flex()
+        .items_center()
+        .gap_1()
+        .text_xs()
+        .whitespace_nowrap()
+        .child(icon(glyph, 12.0, theme::text_faint()))
+        .child(div().text_color(theme::text_muted()).child(value))
+        .child(div().text_color(theme::text_faint()).child(what))
+        .when_some(more, |s, more| s.tooltip(tooltip(more)))
+        .into_any_element()
 }
 
 /// Shown in place of results while the `is:dup` search compares contents
@@ -1898,11 +1931,25 @@ fn comparing_note(done: u64, total: u64) -> impl IntoElement {
 /// folder listed, or for an item that was clicked, which the X puts away
 fn insight_card(explorer: &Explorer, id: NodeId, note: Insight, pinned: bool, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let name = explorer.tree.node(id).name.to_string();
-    let (glyph, tone): (Icon, Hsla) = match note.verdict {
-        Verdict::Safe => (Icon::Check, theme::accent_hi().into()),
-        Verdict::Review => (Icon::Search, theme::text_muted().into()),
-        Verdict::Elsewhere => (Icon::ArrowUpRight, theme::text_muted().into()),
-        Verdict::Keep => (Icon::ShieldCheck, theme::text_muted().into()),
+    let glyph = match note.verdict {
+        Verdict::Safe => Icon::Check,
+        Verdict::Review => Icon::Eye,
+        Verdict::Elsewhere => Icon::Wrench,
+        Verdict::Keep => Icon::Lock,
+    };
+    // Only Safe invites the Collector, so only it takes the brand color
+    let safe = note.verdict == Verdict::Safe;
+    let (tone, glyph_tone, well): (Hsla, Hsla, Hsla) = if safe {
+        (theme::accent_hi().into(), theme::accent_hi().into(), theme::accent_soft().into())
+    } else {
+        (theme::text().into(), theme::text_muted().into(), theme::track().into())
+    };
+    // What it is, after the clicked item's name, as the header already names the
+    // listed folder
+    let what = if pinned {
+        format!("{name} \u{b7} {} \u{b7} {}", note.tag, note.about)
+    } else {
+        format!("{} \u{b7} {}", note.tag, note.about)
     };
     // Rescanning needs a whole disk to rescan
     let action = note.action.filter(|a| *a != Action::RescanAsAdmin || explorer.target.volume.is_some());
@@ -1910,80 +1957,129 @@ fn insight_card(explorer: &Explorer, id: NodeId, note: Insight, pinned: bool, cx
         Some(Action::Copy(command)) => Some(command),
         _ => None,
     };
+    // What's safe goes to the Collector from here, unless the note has its own way
+    let collect = safe && action.is_none() && id != Tree::ROOT && !explorer.is_collected(id);
     div()
         .flex()
-        .flex_col()
-        .gap(px(6.))
+        .items_start()
+        .gap(px(10.))
         .mx_3()
         .mb_2()
-        .p_3()
+        .p(px(10.))
         .rounded(px(10.))
         .bg(theme::bg())
         .text_xs()
         .child(
             div()
                 .flex()
-                .items_baseline()
-                .gap_2()
-                .child(div().flex_none().text_sm().font_weight(FontWeight::SEMIBOLD).child(note.tag))
-                // The listed folder's name is the header's already
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .whitespace_nowrap()
-                        .text_color(theme::text_faint())
-                        .when(pinned, |s| s.child(name)),
-                )
-                .when(pinned, |s| {
-                    s.child(
-                        icon_button(
-                            "close-note",
-                            Icon::X,
-                            cx.listener(|this, _, _, cx| {
-                                if let Some(explorer) = this.explorer() {
-                                    explorer.pinned = None;
-                                    cx.notify();
-                                }
-                            }),
-                        )
-                        .size(px(22.))
-                        .mt(px(-4.))
-                        .mr(px(-4.)),
-                    )
-                }),
+                .flex_none()
+                .items_center()
+                .justify_center()
+                .size(px(26.))
+                .rounded_full()
+                .bg(well)
+                .child(icon(glyph, 14.0, glyph_tone)),
         )
-        .child(div().text_size(px(12.5)).text_color(theme::text_muted()).child(note.about))
-        .when_some(note.how, |s, how| s.child(div().text_size(px(12.5)).child(how)))
-        .when_some(command, |s, command| {
-            s.child(
-                div()
-                    .flex()
-                    .child(div().px_1p5().py_0p5().rounded(px(6.)).bg(theme::track()).text_color(theme::text_muted()).child(command)),
-            )
-        })
         .child(
             div()
                 .flex()
-                .items_center()
-                .gap_1p5()
-                .mt_0p5()
-                .min_h(px(26.))
-                .child(icon(glyph, 13.0, tone))
-                .child(div().flex_1().min_w_0().font_weight(FontWeight::SEMIBOLD).text_color(tone).child(note.verdict.label()))
-                .when_some(action, |s, action| {
-                    s.child(
-                        button(
-                            "note-action",
-                            action.label(),
-                            ButtonStyle::Ghost,
-                            cx.listener(move |this, _, _, cx| run_action(this, action, cx)),
+                .flex_col()
+                .flex_1()
+                .min_w_0()
+                .gap(px(2.))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .min_h(px(26.))
+                        .gap_2()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(tone)
+                                .child(note.verdict.label()),
                         )
-                        .h(px(26.))
-                        .px(px(10.))
-                        .text_xs()
-                        .mr(px(-6.)),
+                        .when(pinned, |s| {
+                            s.child(
+                                icon_button(
+                                    "close-note",
+                                    Icon::X,
+                                    cx.listener(|this, _, _, cx| {
+                                        if let Some(explorer) = this.explorer() {
+                                            explorer.pinned = None;
+                                            cx.notify();
+                                        }
+                                    }),
+                                )
+                                .size(px(22.))
+                                .mr(px(-4.)),
+                            )
+                        }),
+                )
+                .child(div().text_color(theme::text_muted()).child(what))
+                .when_some(note.how, |s, how| s.child(div().mt_1().text_size(px(12.5)).child(how)))
+                .when(command.is_some() || action.is_some() || collect, |s| {
+                    s.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .mt_1p5()
+                            .when_some(command, |s, command| {
+                                s.child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .px_1p5()
+                                        .py_0p5()
+                                        .rounded(px(6.))
+                                        .bg(theme::track())
+                                        .text_color(theme::text_muted())
+                                        .child(command),
+                                )
+                            })
+                            .when_some(action, |s, action| {
+                                let glyph = match action {
+                                    Action::Copy(_) => Icon::Copy,
+                                    Action::Open(_) | Action::Launch(_) => Icon::ArrowUpRight,
+                                    Action::RescanAsAdmin => Icon::Refresh,
+                                };
+                                s.child(
+                                    icon_label_button(
+                                        "note-action",
+                                        glyph,
+                                        action.label(),
+                                        ButtonStyle::Secondary,
+                                        cx.listener(move |this, _, _, cx| run_action(this, action, cx)),
+                                    )
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .text_xs()
+                                    .when(command.is_some(), |s| s.ml_auto()),
+                                )
+                            })
+                            .when(collect, |s| {
+                                s.child(
+                                    icon_label_button(
+                                        "note-collect",
+                                        Icon::Plus,
+                                        "Collect",
+                                        ButtonStyle::Secondary,
+                                        cx.listener(move |this, _, _, cx| {
+                                            if let Some(explorer) = this.explorer() {
+                                                explorer.collect(id);
+                                                cx.notify();
+                                            }
+                                        }),
+                                    )
+                                    .h(px(26.))
+                                    .px(px(10.))
+                                    .text_xs(),
+                                )
+                            }),
                     )
                 }),
         )
@@ -2066,15 +2162,6 @@ fn access_panel() -> impl IntoElement {
                         .child("Open System Settings, then rescan"),
                 ),
         )
-}
-
-fn footer_row(label: impl Into<SharedString>, value: String) -> impl IntoElement {
-    div()
-        .flex()
-        .justify_between()
-        .text_xs()
-        .child(div().text_color(theme::text_faint()).child(label.into()))
-        .child(div().text_color(theme::text_muted()).child(value))
 }
 
 /// An item's glyph: the icon of the app that opens it when one is known, else its

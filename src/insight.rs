@@ -46,7 +46,12 @@ impl Action {
     pub fn label(self) -> &'static str {
         match self {
             Action::Copy(_) => "Copy Command",
+            // Named for where it leads, so the button says what it opens
+            Action::Open("ms-settings:storagesense") => "Open Storage Sense",
+            Action::Open("ms-settings:appsfeatures") => "Open Installed Apps",
             Action::Open(_) => "Open Settings",
+            Action::Launch("cleanmgr.exe") => "Open Disk Cleanup",
+            Action::Launch("SystemPropertiesProtection.exe") => "Open System Protection",
             Action::Launch(_) => "Open Tool",
             Action::RescanAsAdmin => "Rescan as Administrator",
         }
