@@ -22,7 +22,7 @@ const USAGE: &str = "Usage: burrdisk --list <path> [--find <query>] [--limit <n>
 Scans <path> and prints what's inside it, largest first.
 
   --find <query>  Print what a search finds instead, e.g. \".mov >1gb\", \"is:safe\",
-                  \"is:dup\" or \"is:grown\"
+                  \"is:dup\", \"is:grown\" or \"is:synced\"
   --limit <n>     Print at most <n> items (50 by default, all with --csv)
   --csv           Print CSV: path, kind, size in bytes, files, last changed
 
@@ -108,7 +108,8 @@ fn list(options: Options) -> ExitCode {
         if query.grown && growth.is_none() {
             eprintln!("No earlier scan of {} to compare with yet", path.display());
         }
-        search::run(&tree, Tree::ROOT, &query, now, Compared { dupes: dupes.as_ref(), growth: growth.as_ref() })
+        let clouds = crate::cloud::in_tree(&tree);
+        search::run(&tree, Tree::ROOT, &query, now, Compared { dupes: dupes.as_ref(), growth: growth.as_ref(), clouds: &clouds })
     });
     let ids: &[NodeId] = match &results {
         Some(results) => &results.matches,

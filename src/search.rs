@@ -11,6 +11,8 @@
 //! - `is:dup` matches files with a copy elsewhere in the scan, once their contents
 //!   are compared
 //! - `is:grown` matches the folders that grew most since an earlier scan
+//! - `is:synced` matches files a cloud service keeps on this device, which could be
+//!   online only instead
 //!
 //! Results are the outermost matches: a matching folder stands for everything in it
 
@@ -42,6 +44,8 @@ pub struct Query {
     pub dupes: bool,
     /// Only folders that grew since an earlier scan
     pub grown: bool,
+    /// Only files kept on this device in a cloud folder
+    synced: bool,
 }
 
 /// The query for suggestions
@@ -50,8 +54,10 @@ pub const SAFE: &str = "is:safe";
 pub const DUPES: &str = "is:dup";
 /// The query for what grew
 pub const GROWN: &str = "is:grown";
+/// The query for files that could be online only
+pub const SYNCED: &str = "is:synced";
 /// Queries the field shows as chips; Backspace takes each away in one press
-pub const CHIPS: [&str; 3] = [SAFE, DUPES, GROWN];
+pub const CHIPS: [&str; 4] = [SAFE, DUPES, GROWN, SYNCED];
 
 /// What some queries need beyond the scan: copies found by comparing contents, and
 /// what grew since an earlier scan
@@ -59,6 +65,8 @@ pub const CHIPS: [&str; 3] = [SAFE, DUPES, GROWN];
 pub struct Compared<'a> {
     pub dupes: Option<&'a Rc<Dupes>>,
     pub growth: Option<&'a Rc<Growth>>,
+    /// The cloud folders in the scan
+    pub clouds: &'a [NodeId],
 }
 
 enum Unit {
@@ -133,6 +141,8 @@ impl Query {
                 query.dupes = true;
             } else if token == GROWN {
                 query.grown = true;
+            } else if token == SYNCED {
+                query.synced = true;
             } else if let Some(ext) = token.strip_prefix("*.").or_else(|| token.strip_prefix('.')).filter(|e| !e.is_empty()) {
                 query.exts.push(format!(".{ext}"));
             } else if token != ">" && token != "<" {
@@ -156,6 +166,7 @@ impl Query {
             && !self.safe
             && !self.dupes
             && !self.grown
+            && !self.synced
     }
 
     fn matches(&self, tree: &Tree, id: NodeId, now: u32, compared: Compared) -> bool {
@@ -185,6 +196,9 @@ impl Query {
             return false;
         }
         if self.grown && !compared.growth.is_some_and(|g| g.grew(id).is_some()) {
+            return false;
+        }
+        if self.synced && !crate::cloud::synced(tree, compared.clouds, id) {
             return false;
         }
         !self.safe || crate::insight::suggested(tree, id, now)

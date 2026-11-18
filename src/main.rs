@@ -5,6 +5,7 @@ mod app;
 mod appicon;
 mod assets;
 mod cli;
+mod cloud;
 mod dupes;
 mod export;
 mod filetype;

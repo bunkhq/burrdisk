@@ -163,6 +163,10 @@ fn item_menu(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -
     }
     items.push(MenuItem::new(format!("Show in {}", platform::FILE_MANAGER), move |_, cx| cx.reveal_path(&reveal)));
     items.push(MenuItem::new("Open in Terminal", move |_, _| app::open_in_terminal(&terminal)));
+    if crate::cloud::can_free_up(&explorer.tree, &explorer.clouds, id) {
+        let entity = entity.clone();
+        items.push(MenuItem::new("Free Up Space", move |_, cx| entity.update(cx, |this, cx| this.free_up(id, cx))));
+    }
     items.push(
         MenuItem::new(format!("Move \u{201c}{name}\u{201d} to Collector"), on_explorer(Explorer::collect))
             .shortcut(platform::COLLECT_KEYS)
@@ -1450,6 +1454,7 @@ fn query_chip(query: &str) -> gpui::Div {
     let (glyph, label) = match query {
         search::DUPES => (Icon::Copy, "Duplicates"),
         search::GROWN => (Icon::TrendingUp, "Grew"),
+        search::SYNCED => (Icon::Cloud, "Synced"),
         _ => (Icon::Check, "Safe to clear"),
     };
     div()

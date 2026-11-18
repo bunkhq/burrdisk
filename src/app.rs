@@ -187,6 +187,8 @@ pub struct Explorer {
     _history: Option<Task<()>>,
     /// Keeps the tree up to date with changes made outside Burrdisk
     _live: Option<Live>,
+    /// The cloud folders in the scan
+    pub clouds: Rc<Vec<NodeId>>,
 }
 
 /// Watches what was scanned for changes. Each change marks the folder it happened in,
@@ -653,6 +655,7 @@ impl Burrdisk {
 
     fn open_explorer(&mut self, target: ScanTarget, tree: Tree, scanned_at: Instant, cx: &mut Context<Self>) {
         let segments = Rc::new(sunburst::layout(&tree, Tree::ROOT, Measure::Size, Palette::Wheel));
+        let clouds = Rc::new(crate::cloud::in_tree(&tree));
         self.screen = Screen::Explorer(Explorer {
             target,
             scanned_at,
@@ -695,6 +698,7 @@ impl Burrdisk {
             growth: None,
             _history: None,
             _live: None,
+            clouds,
         });
         let mode = self.chart_mode;
         if let Some(explorer) = self.explorer() {
@@ -1211,6 +1215,35 @@ impl Burrdisk {
         }
     }
 
+    /// Asks the cloud service to keep an item online only, freeing the space it takes
+    /// here. The live view shows the space come back as the service gets to it
+    pub fn free_up(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer() else { return };
+        let path = explorer.tree.path(id);
+        let node = explorer.tree.node(id);
+        let (name, size) = (node.name.to_string(), node.size);
+        explorer.context = None;
+        let service = crate::cloud::root_of(&path).map_or("The cloud service".to_string(), |r| r.service.clone());
+        let job = cx.background_executor().spawn(async move { crate::cloud::free_up(&path) });
+        cx.spawn(async move |this, cx| {
+            let result = job.await;
+            this.update(cx, |this, cx| match result {
+                Ok(()) => this.show_notice(
+                    format!(
+                        "{service} is making \u{201c}{name}\u{201d} online-only, freeing up to {}",
+                        crate::format::bytes(size)
+                    ),
+                    false,
+                    cx,
+                ),
+                Err(error) => this.show_notice(format!("Couldn\u{2019}t free up \u{201c}{name}\u{201d}: {error}"), true, cx),
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// Saves what the sidebar lists as CSV, after asking where: the folder in focus's
     /// contents, or every search result, not just those shown
     pub fn export_list(&mut self, cx: &mut Context<Self>) {
@@ -1514,7 +1547,7 @@ impl Explorer {
             Some(Dupes::Found(found)) => Some(found),
             _ => None,
         };
-        let compared = crate::search::Compared { dupes, growth: self.growth.as_ref() };
+        let compared = crate::search::Compared { dupes, growth: self.growth.as_ref(), clouds: &self.clouds };
         search.results = (!query.is_empty())
             .then(|| Rc::new(crate::search::run(&self.tree, self.focus, &query, crate::format::unix_now(), compared)));
     }
