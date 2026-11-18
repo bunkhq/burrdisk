@@ -59,10 +59,12 @@ It is a native app written in Rust with [GPUI](https://gpui.rs), the GPU-acceler
 
 ## How it works
 
-1. **Pick a disk.** Home lists your disks, with the startup disk first and other drives below. Before a scan, each burr's spines show how full the disk is. The menu beside each Scan button can rescan (also as administrator), forget a scan, show the disk in Finder (File Explorer on Windows), or open Get Info (Properties). You can also scan any folder.
+1. **Pick a disk.** Home lists your disks, with the startup disk first and other drives below. Before a scan, each burr's spines show how full the disk is. The menu beside each Scan button can rescan (also as administrator), forget a scan, show the disk in Finder (File Explorer on Windows), or open Get Info (Properties). You can also scan any folder: pick one, drop it on the window, or on Windows right-click it in File Explorer and pick **Scan with Burrdisk** (under **Show more options** on Windows 11).
 2. **Explore.** The scan shows live progress. The explorer then draws the disk as a sunburst. Each ring is one level deeper in the folder tree, and each slice is sized by the space it takes. You can size the chart by space or by file count, group it by file type, or color it by age to see what nobody has touched in months or years. The sidebar lists everything in the current folder, largest first.
 3. **Find things.** Start typing anywhere in the explorer, or press `⌘F` (`Ctrl+F`), to search the folder you're in. Words match names, `.mp4` or `*.dmg` match extensions, `>500mb` matches files over a size, and `>1y`, `>6mo` or `<2w` match by when things last changed. Combine them: `.mov >1gb >1y` finds big videos nobody has touched in a year. The chart lights up what matches, and **Collect all** puts every result in the Collector.
    **Safe to clear**, at the end of the search field, finds everything Burrdisk knows is safe to move to the Trash: app caches, temporary files, and the dependencies and build output of projects you haven't touched in two weeks.
+   `is:dup` finds files of 1 MB or more that have an exact copy elsewhere in the scan. It compares sizes first, then contents, in the background. Copies sit side by side, and **Collect extra copies** always leaves one of each. Files that OneDrive or iCloud keep online only are never read, so nothing downloads.
+   `is:grown` lists the folders that grew by 100 MB or more since an earlier scan of the same disk or folder, biggest growth first. The footer of the top folder shows how much the whole scan grew or shrank.
 4. **Know what it is.** Burrdisk recognizes well-known space hogs, such as `node_modules`, build folders, caches, Docker and WSL disks, hiberfil.sys, WinSxS and Windows.old. It tags them in the list, and a note says what each one is, whether it's safe to move to the Trash, and the right way to clear it when it isn't. Click a file or Hidden space to see its note. Things the system needs can't go in the Collector.
 5. **Collect, then clean.** Drag files and folders from the chart or the list into the Collector at the bottom, or right-click one and pick **Move to Collector**. When the pile looks right, **Move to Trash** starts a 5-second countdown. **Stop** or `Esc` cancels it.
 
@@ -90,7 +92,7 @@ Burrdisk updates itself. It checks GitHub Releases a few seconds after launch an
 
 ## Privacy
 
-Burrdisk has no accounts, analytics or telemetry. Scan results stay on your computer and are kept only for the session. The only network requests are the update checks to the GitHub Releases API, and update downloads when you ask for one.
+Burrdisk has no accounts, analytics or telemetry. Scan results stay on your computer. To show what grew, Burrdisk keeps the sizes of folders of 50 MB or more from your last 12 scans of each disk or folder, in `%LOCALAPPDATA%\Burrdisk\History` on Windows and `~/Library/Application Support/Burrdisk/History` on macOS. Delete that folder to forget them. The only network requests are the update checks to the GitHub Releases API, and update downloads when you ask for one.
 
 ## Keyboard
 
@@ -100,6 +102,8 @@ Burrdisk has no accounts, analytics or telemetry. Scan results stay on your comp
 | `Esc`, `⌫`, `⌘↑` | `Esc`, `Backspace`, `Ctrl+↑` | Go up a folder (or back to the disk list); stops a Trash countdown |
 | `Space` | | Quick Look the hovered item (macOS only) |
 | `⌘F`, or just type | `Ctrl+F`, or just type | Search the folder you're in; `Esc` closes the search |
+| `↑`, `↓` | `↑`, `↓` | Select the previous or next item in the list |
+| `Return`, `→` | `Enter`, `→` | Open the selected item; `←` goes back |
 | `⌘⌫` | `Ctrl+Backspace` | Move the hovered item to the Collector |
 | `⌘Q` | `Alt+F4` | Quit |
 
