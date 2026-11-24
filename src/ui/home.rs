@@ -238,7 +238,7 @@ fn trash_line(bytes: u64, items: u64, cx: &mut Context<Burrdisk>) -> impl IntoEl
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme::text_faint())
+                        .text_color(theme::text_quiet())
                         .child(format!("It still takes space until you empty the {}", platform::TRASH)),
                 ),
         )

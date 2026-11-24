@@ -283,7 +283,11 @@ pub fn run(tree: &Tree, root: NodeId, query: &Query, now: u32, compared: Compare
         // Only files compared can match, which are far fewer than the scan's items
         let inside =
             |id: NodeId| id != root && tree.is_ancestor(root, id) && !skip.iter().any(|s| tree.is_ancestor(*s, id));
-        matches.extend(d.files().filter(|id| inside(*id) && query.matches(tree, *id, now, compared)));
+        // Copies the system keeps, like Windows' installer cache, can't be cleared, so
+        // they don't list, though they still count as the copy a listed file has
+        matches.extend(d.files().filter(|id| {
+            inside(*id) && query.matches(tree, *id, now, compared) && !crate::insight::protected(tree, *id)
+        }));
     } else if !waiting {
         // Folders that hold a cloud folder, through which a search for synced files
         // has to pass; everything else outside one is skipped whole

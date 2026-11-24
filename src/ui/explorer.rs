@@ -194,8 +194,9 @@ fn item_menu(explorer: &Explorer, window: &Window, cx: &mut Context<Burrdisk>) -
 fn toast(notice: Notice, cx: &mut Context<Burrdisk>) -> AnyElement {
     let (tone, glyph): (Hsla, Icon) = match notice.tone {
         Tone::Failed => (theme::danger().into(), Icon::X),
-        Tone::Done => (gpui::hsla(0.40, 0.6, 0.55, 1.0), Icon::Trash),
+        Tone::Done => (SUCCESS, Icon::Trash),
         Tone::Info => (theme::text_muted().into(), Icon::Check),
+        Tone::Error => (theme::text_muted().into(), Icon::X),
     };
     let left = notice.lasts().as_secs_f32() - notice.shown.elapsed().as_secs_f32();
     let put_back = notice.put_back.is_some();
@@ -277,6 +278,13 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
         .chain(groups.into_iter().map(|(g, name)| (None, Some(g), name)))
         .collect();
     let last = crumbs.len() - 1;
+    // Deep paths keep the scan's top and the nearest folders, with the middle left out,
+    // so every crumb shown stays readable instead of all squeezing to a few letters
+    const NEAREST: usize = 3;
+    let skipped = (crumbs.len() > NEAREST + 2).then(|| 1..crumbs.len() - NEAREST);
+    let hidden_path = skipped.clone().map(|range| {
+        crumbs[range].iter().map(|(_, _, name)| name.as_str()).collect::<Vec<_>>().join(" \u{203a} ")
+    });
     div()
         .flex()
         .flex_none()
@@ -317,6 +325,7 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
                 .min_w_0()
                 .items_center()
                 .gap_0p5()
+                .mr_2()
                 .overflow_hidden()
                 .child({
                     // The root of every path: the disk list
@@ -341,6 +350,26 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
                         .child("Disks and Folders")
                 })
                 .children(crumbs.into_iter().enumerate().flat_map(|(ix, (id, group, name))| {
+                    if skipped.as_ref().is_some_and(|range| range.contains(&ix)) {
+                        // The left-out folders show as one faint ellipsis that names them on hover
+                        if Some(ix) != skipped.as_ref().map(|range| range.start) {
+                            return Vec::new();
+                        }
+                        return vec![
+                            icon(Icon::ChevronRight, 12.0, theme::text_faint()).into_any_element(),
+                            div()
+                                .id("crumb-skipped")
+                                .flex_none()
+                                .px_1p5()
+                                .py_1()
+                                .text_sm()
+                                .text_color(theme::text_faint())
+                                .occlude()
+                                .tooltip(tooltip(hidden_path.clone().unwrap_or_default()))
+                                .child("\u{2026}")
+                                .into_any_element(),
+                        ];
+                    }
                     let is_last = ix == last;
                     let t = fx::hover(("crumb", ix));
                     let crumb = div()
@@ -352,7 +381,9 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
                         .py_1()
                         .rounded(px(7.))
                         .text_sm()
-                        .flex_shrink()
+                        // The open folder's own name never squeezes; the ones above it do
+                        .when(is_last, |s| s.flex_none())
+                        .when(!is_last, |s| s.flex_shrink())
                         .min_w(px(36.))
                         .max_w(px(220.))
                         .whitespace_nowrap()
@@ -383,7 +414,7 @@ fn titlebar(explorer: &Explorer, update: Option<AnyElement>, window: &Window, cx
                         .child(name)
                         .into_any_element();
                     let separator = icon(Icon::ChevronRight, 12.0, theme::text_faint()).into_any_element();
-                    [separator, crumb]
+                    vec![separator, crumb]
                 })),
         )
         .children(update.map(|u| div().mr(px(8.)).child(u)))
@@ -547,7 +578,10 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
             // Things Burrdisk knows say what they are, and open their note on a click
             let hint = match insight::explain(&explorer.tree, id) {
                 Some(_) if node.kind == NodeKind::Hidden => "Click to see why".to_string(),
-                Some(note) if node.kind == NodeKind::Dir => format!("{} \u{b7} Click to open", note.tag),
+                // The type chart's items don't open, so a folder there shows its note too
+                Some(note) if node.kind == NodeKind::Dir && breakdown.is_none() => {
+                    format!("{} \u{b7} Click to open", note.tag)
+                }
                 Some(note) => format!("{} \u{b7} Click to learn more", note.tag),
                 None => hint.to_string(),
             };
@@ -586,6 +620,11 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
             let parent = explorer.tree.node(explorer.focus).parent.unwrap_or(Tree::ROOT);
             (format!("Back to {}", explorer.tree.node(parent).name), figure(explorer, explorer.focus), String::new())
         }
+        (None, None) if comparing(explorer).is_some() => {
+            let percent = comparing(explorer).expect("comparing").percent();
+            let place = format!("in {}", explorer.tree.node(explorer.focus).name);
+            ("Comparing files".to_string(), format!("{percent}%"), place)
+        }
         (None, None) if results.is_some() => {
             let results = results.expect("results");
             let place = format!("in {}", explorer.tree.node(explorer.focus).name);
@@ -608,6 +647,11 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let name_size = (inner * 0.13).clamp(11.0, 15.0);
     let value_size = (inner * 0.25).clamp(17.0, 34.0) * if explorer.mode == ChartMode::Count { 0.8 } else { 1.0 };
     let hint_size = (inner * 0.105).clamp(10.0, 12.5);
+    // The disc is round, so its lines get less room than the box they're laid out in.
+    // Shortened here, as text cut by the box would lose both ends without an ellipsis
+    let room = |size: f32| ((inner * 1.3) / (size * 0.56)) as usize;
+    let label_name = fit_middle(&label_name, room(name_size));
+    let label_hint = fit_end(&label_hint, room(hint_size));
 
     let chart_drag = explorer.chart_drag.clone();
     let can_go_up = explorer.focus != Tree::ROOT || explorer.group_focus.is_some();
@@ -702,6 +746,9 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                 // File types open like folders; the files inside them don't
                 Some(Hover::Target(Target::Group(g))) => explorer.open_group(Some(g)),
                 Some(Hover::Target(Target::Node(id))) if explorer.mode != ChartMode::Types => explorer.activate(id),
+                Some(Hover::Target(Target::Node(id))) if insight::explain(&explorer.tree, id).is_some() => {
+                    explorer.pinned = Some(id);
+                }
                 _ => return,
             }
             cx.notify();
@@ -746,14 +793,16 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         .gap_0p5()
                         .when(going_up, |s| s.child(icon(Icon::CornerUpLeft, 14.0, theme::accent_hi())))
                         .child(
-                            div()
-                                .w_full()
-                                .text_center()
-                                .text_size(px(name_size))
-                                .text_color(if going_up { theme::accent_hi() } else { theme::text_muted() })
-                                .whitespace_nowrap()
-                                .truncate()
-                                .child(label_name),
+                            // Centered by the box around it, as centered text that runs
+                            // long gets cut at both ends instead of ending in an ellipsis
+                            div().flex().justify_center().w_full().child(
+                                div()
+                                    .min_w_0()
+                                    .text_size(px(name_size))
+                                    .text_color(if going_up { theme::accent_hi() } else { theme::text_muted() })
+                                    .truncate()
+                                    .child(label_name),
+                            ),
                         )
                         .child(
                             div()
@@ -764,14 +813,14 @@ fn chart(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoElement {
                         )
                         .when(!label_hint.is_empty(), |s| {
                             s.child(
-                                div()
-                                    .w_full()
-                                    .text_center()
-                                    .text_size(px(hint_size))
-                                    .text_color(theme::text_faint())
-                                    .whitespace_nowrap()
-                                    .truncate()
-                                    .child(label_hint),
+                                div().flex().justify_center().w_full().child(
+                                    div()
+                                        .min_w_0()
+                                        .text_size(px(hint_size))
+                                        .text_color(theme::text_faint())
+                                        .truncate()
+                                        .child(label_hint),
+                                ),
                             )
                         })
                         .with_animation(
@@ -823,7 +872,7 @@ fn age_legend() -> impl IntoElement {
             div()
                 .flex()
                 .text_size(px(11.))
-                .text_color(theme::text_faint())
+                .text_color(theme::text_quiet())
                 .children(
                     sunburst::AGE_STOPS
                         .iter()
@@ -871,7 +920,7 @@ fn hover_weights(explorer: &Explorer, segments: &[Segment]) -> (Vec<f32>, f32, f
 fn hint_for(kind: NodeKind) -> &'static str {
     match kind {
         NodeKind::Dir => "Click to open",
-        NodeKind::File => "Drag into the Collector below",
+        NodeKind::File => "Drag to the Collector",
         NodeKind::Hidden => "Not visible to the scan",
     }
 }
@@ -930,12 +979,22 @@ fn place(explorer: &Explorer, id: NodeId) -> String {
         .iter()
         .map(|n| explorer.tree.node(*n).name)
         .collect();
-    match names.as_slice() {
-        [] => format!("In {}", explorer.tree.node(explorer.focus).name),
-        [one] => one.to_string(),
-        [first, second] => format!("{first} \u{203a} {second}"),
-        [first, .., last] => format!("{first} \u{203a} \u{2026} \u{203a} {last}"),
+    // Deep paths keep their top folder and as many of the nearest ones as fit, which
+    // say the most, with the middle left out
+    const ROOM: usize = 40;
+    let sep = " \u{203a} ";
+    let Some((first, rest)) = names.split_first() else {
+        return format!("In {}", explorer.tree.node(explorer.focus).name);
+    };
+    let width = |names: &[&str]| names.iter().map(|n| n.chars().count() + 3).sum::<usize>();
+    if width(&names) <= ROOM + 3 || rest.len() == 1 {
+        return names.join(sep);
     }
+    let mut keep = 1;
+    while keep < rest.len() - 1 && width(&rest[rest.len() - keep - 1..]) + first.chars().count() + 4 <= ROOM {
+        keep += 1;
+    }
+    format!("{first}{sep}\u{2026}{sep}{}", rest[rest.len() - keep..].join(sep))
 }
 
 /// A result's color: its slice's when the chart draws it, else one that says what it
@@ -988,7 +1047,8 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
     let is_hovered = explorer.hover == Some(Hover::Target(target))
         || node.is_some_and(|id| explorer.context.is_some_and(|(c, _)| c == id));
     let t = fx::track(key, is_hovered);
-    let compact = ratio < COMPACT_RATIO;
+    // Search results keep their full rows, as only those say where each one is
+    let compact = ratio < COMPACT_RATIO && place.is_none();
     let drag = node.and_then(|id| explorer.drag_item(id));
     let tint = Hsla { l: (color.l + 0.10 + 0.08 * t).min(0.92), ..color };
 
@@ -1105,7 +1165,7 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
                     .child(match place {
                         Some(place) => div()
                             .text_size(px(11.5))
-                            .text_color(theme::text_faint())
+                            .text_color(theme::text_quiet())
                             .whitespace_nowrap()
                             .truncate()
                             .child(place),
@@ -1161,6 +1221,26 @@ fn row(explorer: &Explorer, row: Row, ix: usize, list_key: &str, previewing: boo
     } else {
         el.into_any_element()
     }
+}
+
+/// `text` in at most `room` characters, its middle left out, so a name keeps its
+/// start and its extension
+fn fit_middle(text: &str, room: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= room || room < 5 {
+        return text.to_string();
+    }
+    let tail = (room - 1) / 2;
+    let head = room - 1 - tail;
+    chars[..head].iter().chain(['\u{2026}'].iter()).chain(chars[chars.len() - tail..].iter()).collect()
+}
+
+/// `text` in at most `room` characters, ending in an ellipsis when cut
+fn fit_end(text: &str, room: usize) -> String {
+    if text.chars().count() <= room || room < 2 {
+        return text.to_string();
+    }
+    text.chars().take(room - 1).chain(['\u{2026}']).collect()
 }
 
 /// A file or folder row in the folder charts, or an item row in the type chart
@@ -1364,7 +1444,10 @@ fn search_listing(explorer: &Explorer, results: &search::Results) -> Listing {
         Some(dupes) => {
             let files = results.matches.iter().map(|id| dupes.order(*id).0).collect::<std::collections::HashSet<_>>().len();
             let of = if files == 1 { "1 file".to_string() } else { format!("{} files", format::count(files as u64)) };
-            format!("{} copies of {of}", format::count(results.matches.len() as u64))
+            match results.matches.len() {
+                1 => format!("1 copy of {of}"),
+                n => format!("{} copies of {of}", format::count(n as u64)),
+            }
         }
         None => match &results.growth {
             Some(growth) => crate::history::since(growth.since, format::unix_now()),
@@ -1393,8 +1476,14 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
     let text = explorer.search.as_ref().map(|s| s.text.clone()).unwrap_or_default();
     let t = fx::hover("search-field");
     let folder = explorer.tree.node(explorer.focus).name.to_string();
-    // A leading chip query reads as a chip, not as its syntax
-    let (chip, text) = match search::CHIPS.iter().find_map(|c| Some((*c, text.strip_prefix(c)?))) {
+    // A leading chip query reads as a chip, not as its syntax, in any case but only as
+    // a whole word, the way the search reads it
+    let leading = |c: &str| {
+        let rest = text.get(c.len()..)?;
+        (text[..c.len()].eq_ignore_ascii_case(c) && (rest.is_empty() || rest.starts_with(char::is_whitespace)))
+            .then_some(rest)
+    };
+    let (chip, text) = match search::CHIPS.iter().find_map(|c| Some((*c, leading(c)?))) {
         Some((chip, rest)) => (Some(chip), rest.to_string()),
         None => (None, text),
     };
@@ -1403,12 +1492,7 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
         .w(px(1.5))
         .h(px(16.))
         .rounded_full()
-        .bg(theme::accent())
-        .with_animation(
-            "search-caret",
-            Animation::new(Duration::from_millis(1060)).repeat(),
-            |el, t| el.opacity(if t < 0.55 { 1. } else { 0. }),
-        );
+        .when(explorer.caret_on, |s| s.bg(theme::accent()));
     div()
         .id("search-field")
         .on_hover(fx::on_hover("search-field"))
@@ -1422,7 +1506,7 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
         .pl_2p5()
         .pr_1()
         .rounded(px(9.))
-        .bg(if open { theme::bg().into() } else { fx::mix(gpui::rgba(0x14141680), theme::bg(), t) })
+        .bg(if open { theme::bg().into() } else { fx::mix(gpui::Rgba { a: 0.5, ..theme::bg() }, theme::bg(), t) })
         .when(!open, |s| s.cursor_text())
         .on_click(cx.listener(|this, _, _, cx| {
             if let Some(explorer) = this.explorer() {
@@ -1553,6 +1637,7 @@ fn search_hint(cx: &mut Context<Burrdisk>) -> impl IntoElement {
                 .id(key)
                 .on_hover(fx::on_hover(key))
                 .px_1p5()
+                .py(px(3.))
                 .rounded(px(6.))
                 .bg(fx::mix(theme::track(), theme::raised(), t))
                 .text_color(fx::mix(theme::text_muted(), theme::text(), t))
@@ -1602,16 +1687,14 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
     };
     let searching = explorer.search.is_some();
     // While a search for duplicates waits on the comparison, it says how far that got
-    let comparing = results.is_some_and(|r| r.matches.is_empty()).then(|| explorer.comparing()).flatten().filter(|_| {
-        explorer.search.as_ref().is_some_and(|s| search::Query::parse(&s.text).dupes)
-    });
+    let comparing = comparing(explorer);
     let no_matches = results.is_some_and(|r| r.matches.is_empty()) && comparing.is_none();
     // What grew needs an earlier scan, and says so when there's none or nothing grew
     let grown_query = explorer.search.as_ref().is_some_and(|s| search::Query::parse(&s.text).grown);
     let (empty_title, empty_detail) = match (&explorer.growth, grown_query) {
         (None, true) => (
             "Nothing to compare with yet".to_string(),
-            "Burrdisk remembers each scan. Scan this again another day to see what grew".to_string(),
+            "Burrdisk remembers each scan. Scan this again another day to see what grew.".to_string(),
         ),
         (Some(growth), true) => (
             format!("Nothing grew by {} or more", format::bytes(crate::history::MIN_GROWTH)),
@@ -1627,7 +1710,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
         r.matches
             .iter()
             .take(MAX_ROWS)
-            .filter(|id| !explorer.is_collected(**id))
+            .filter(|id| !explorer.is_collected(**id) && !insight::protected(&explorer.tree, **id))
             .filter(|id| {
                 r.dupes.as_ref().is_none_or(|d| {
                     d.copies(&explorer.tree, **id)
@@ -1640,6 +1723,11 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
     let previewing = explorer.preview.is_some() || explorer.group_preview.is_some();
     let Listing { key: list_key, title, title_color, title_icon, figure: (focus_num, focus_unit), aside, rows, remaining, folder } =
         listing;
+    // Until the comparison ends there are no copies yet, rather than none
+    let ((focus_num, focus_unit), aside) = match comparing {
+        Some(c) => ((c.percent().to_string(), "%".to_string()), "compared so far".to_string()),
+        None => ((focus_num, focus_unit), aside),
+    };
     let hovered = explorer.hover;
 
     // Composition strip: the biggest rows side by side, in their chart colors
@@ -1761,12 +1849,14 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                                         }
                                     }),
                                 )
+                                .tooltip(tooltip(format!("Move to Collector  {}", platform::COLLECT_KEYS)))
                                 .size(px(24.)),
                             )
                         })
                         .when_some(reveal_path, |s, path| {
                             s.child(
                                 icon_button("reveal-focus", Icon::ArrowUpRight, move |_, _, cx| cx.reveal_path(&path))
+                                    .tooltip(tooltip(format!("Show in {}", platform::FILE_MANAGER)))
                                     .size(px(24.)),
                             )
                         })
@@ -1841,8 +1931,8 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
             explorer
                 .explained()
                 // A search lists results, not the folder, so only a clicked item's note shows
-                .filter(|(_, _, pinned)| *pinned || results.is_none())
-                .map(|(id, note, pinned)| insight_card(explorer, id, note, pinned, cx)),
+                .filter(|(_, _, pinned, _)| *pinned || results.is_none())
+                .map(|(id, note, pinned, from)| insight_card(explorer, id, note, pinned, from, cx)),
         )
         .when(access_hint, |s| s.child(access_panel()))
         .child(
@@ -1853,7 +1943,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                 .overflow_y_scroll()
                 .track_scroll(&explorer.rows_scroll)
                 .pb_2()
-                .when_some(comparing, |s, (done, total)| s.child(comparing_note(done, total)))
+                .when_some(comparing, |s, c| s.child(comparing_note(c)))
                 .when(no_matches, |s| {
                     s.child(
                         div()
@@ -1863,7 +1953,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                             .px_5()
                             .py_3()
                             .child(div().text_sm().text_color(theme::text_muted()).child(empty_title))
-                            .child(div().text_xs().text_color(theme::text_faint()).child(empty_detail)),
+                            .child(div().text_xs().text_color(theme::text_quiet()).child(empty_detail)),
                     )
                 })
                 .children(rows)
@@ -1892,17 +1982,32 @@ fn stat(id: &'static str, glyph: Icon, value: String, what: String, more: Option
         .whitespace_nowrap()
         .child(icon(glyph, 12.0, theme::text_faint()))
         .child(div().text_color(theme::text_muted()).child(value))
-        .child(div().text_color(theme::text_faint()).child(what))
+        .child(div().text_color(theme::text_quiet()).child(what))
         .when_some(more, |s, more| s.tooltip(tooltip(more)))
         .into_any_element()
 }
 
+/// How far the comparison of contents got, while a search for duplicates waits on it
+fn comparing(explorer: &Explorer) -> Option<app::Comparing> {
+    let waiting = explorer.results().is_some_and(|r| r.matches.is_empty())
+        && explorer.search.as_ref().is_some_and(|s| search::Query::parse(&s.text).dupes);
+    waiting.then(|| explorer.comparing()).flatten()
+}
+
 /// Shown in place of results while the `is:dup` search compares contents
-fn comparing_note(done: u64, total: u64) -> impl IntoElement {
-    let progress = if total == 0 {
-        "Finding files of the same size".to_string()
+/// Which of eight positions a spinner is in now, moving one every 120ms
+fn spinner_step() -> u128 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(std::time::Instant::now).elapsed().as_millis() / 120 % 8
+}
+
+fn comparing_note(c: app::Comparing) -> impl IntoElement {
+    let progress = if c.reading > 0 {
+        format!("{} of {} read", format::bytes(c.read.min(c.reading)), format::bytes(c.reading))
+    } else if c.checking > 0 {
+        format!("{} of {} files of the same size checked", format::count(c.checked.min(c.checking)), format::count(c.checking))
     } else {
-        format!("{} of {} read", format::bytes(done.min(total)), format::bytes(total))
+        "Finding files of the same size".to_string()
     };
     div()
         .flex()
@@ -1911,10 +2016,11 @@ fn comparing_note(done: u64, total: u64) -> impl IntoElement {
         .py_3()
         .child(
             div().mt(px(2.)).child(
-                icon(Icon::Loader, 14.0, theme::accent_hi())
-                    .with_animation("comparing", Animation::new(Duration::from_millis(900)).repeat(), |el, t| {
-                        el.with_transformation(gpui::Transformation::rotate(gpui::radians(t * std::f32::consts::TAU)))
-                    }),
+                // Turns an eighth with each redraw the comparison asks for, every 120ms. An
+                // endless animation would redraw the whole window every frame instead
+                icon(Icon::Loader, 14.0, theme::accent_hi()).with_transformation(gpui::Transformation::rotate(
+                    gpui::radians(spinner_step() as f32 * std::f32::consts::FRAC_PI_4),
+                )),
             ),
         )
         .child(
@@ -1923,13 +2029,20 @@ fn comparing_note(done: u64, total: u64) -> impl IntoElement {
                 .flex_col()
                 .gap_1()
                 .child(div().text_sm().text_color(theme::text_muted()).child("Comparing files"))
-                .child(div().text_xs().text_color(theme::text_faint()).child(progress)),
+                .child(div().text_xs().text_color(theme::text_quiet()).child(progress)),
         )
 }
 
 /// What a well-known item is and how to clear it: under the sidebar's header for the
 /// folder listed, or for an item that was clicked, which the X puts away
-fn insight_card(explorer: &Explorer, id: NodeId, note: Insight, pinned: bool, cx: &mut Context<Burrdisk>) -> impl IntoElement {
+fn insight_card(
+    explorer: &Explorer,
+    id: NodeId,
+    note: Insight,
+    pinned: bool,
+    from: NodeId,
+    cx: &mut Context<Burrdisk>,
+) -> impl IntoElement {
     let name = explorer.tree.node(id).name.to_string();
     let glyph = match note.verdict {
         Verdict::Safe => Icon::Check,
@@ -1946,10 +2059,12 @@ fn insight_card(explorer: &Explorer, id: NodeId, note: Insight, pinned: bool, cx
     };
     // What it is, after the clicked item's name, as the header already names the
     // listed folder
-    let what = if pinned {
-        format!("{name} \u{b7} {} \u{b7} {}", note.tag, note.about)
-    } else {
-        format!("{} \u{b7} {}", note.tag, note.about)
+    // Inside a folder the system needs, the note is that folder's, so it says whose
+    let what = match (from == id, pinned) {
+        (true, true) => format!("{name} \u{b7} {} \u{b7} {}", note.tag, note.about),
+        (true, false) => format!("{} \u{b7} {}", note.tag, note.about),
+        (false, true) => format!("{name} \u{b7} Part of {} \u{b7} {}", explorer.tree.node(from).name, note.tag),
+        (false, false) => format!("Part of {} \u{b7} {}", explorer.tree.node(from).name, note.tag),
     };
     // Rescanning needs a whole disk to rescan
     let action = note.action.filter(|a| *a != Action::RescanAsAdmin || explorer.target.volume.is_some());
@@ -2014,7 +2129,7 @@ fn insight_card(explorer: &Explorer, id: NodeId, note: Insight, pinned: bool, cx
                                         }
                                     }),
                                 )
-                                .size(px(22.))
+                                .size(px(24.))
                                 .mr(px(-4.)),
                             )
                         }),

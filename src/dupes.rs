@@ -34,6 +34,9 @@ pub struct Candidate {
 
 #[derive(Default)]
 pub struct Progress {
+    /// Files whose ends were read so far in the first pass, of `checking`
+    pub checked: AtomicU64,
+    pub checking: AtomicU64,
     /// Bytes read whole so far, of `total`, which is known once the first pass is done
     pub done: AtomicU64,
     pub total: AtomicU64,
@@ -109,33 +112,62 @@ pub fn candidates(tree: &Tree) -> Vec<Candidate> {
 }
 
 /// Compares the candidates' contents. `None` when cancelled. Runs on a few threads
-/// of its own at background priority, so the rest of the computer stays responsive
-/// while it reads
+/// of its own at low priority, so the rest of the computer stays responsive while it
+/// reads
 pub fn find(candidates: Vec<Candidate>, progress: &Progress) -> Option<Dupes> {
     let threads = std::thread::available_parallelism().map_or(2, |n| n.get() / 4).clamp(1, 3);
-    match rayon::ThreadPoolBuilder::new().num_threads(threads).start_handler(|_| background_priority()).build() {
+    match rayon::ThreadPoolBuilder::new().num_threads(threads).start_handler(|_| low_priority()).build() {
         Ok(pool) => pool.install(|| compare(candidates, progress)),
         Err(_) => compare(candidates, progress),
     }
 }
 
-/// Lowers the thread's CPU and disk priority below what the user is doing
-fn background_priority() {
+/// Lowers the thread's priority below what the user is doing. Not to background
+/// priority, whose disk reads Windows and macOS throttle hard even on an idle disk,
+/// which made a comparison of a whole disk take many minutes
+fn low_priority() {
     #[cfg(windows)]
     unsafe {
-        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
-        SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_LOWEST};
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
     }
     #[cfg(target_os = "macos")]
     unsafe {
-        libc::setpriority(libc::PRIO_DARWIN_THREAD, 0, libc::PRIO_DARWIN_BG);
+        libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0);
     }
+}
+
+/// Opens a file to compare, asking Windows to let other programs' reads go first
+fn open(path: &std::path::Path) -> Option<File> {
+    let file = File::open(path).ok()?;
+    #[cfg(windows)]
+    unsafe {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_IO_PRIORITY_HINT_INFO, FileIoPriorityHintInfo, IoPriorityHintLow, SetFileInformationByHandle,
+        };
+        let hint = FILE_IO_PRIORITY_HINT_INFO { PriorityHint: IoPriorityHintLow };
+        SetFileInformationByHandle(
+            file.as_raw_handle(),
+            FileIoPriorityHintInfo,
+            &hint as *const _ as *const _,
+            size_of::<FILE_IO_PRIORITY_HINT_INFO>() as u32,
+        );
+    }
+    Some(file)
 }
 
 fn compare(candidates: Vec<Candidate>, progress: &Progress) -> Option<Dupes> {
     // First pass: length and both ends
-    let sampled: Vec<(Candidate, Sample)> =
-        candidates.into_par_iter().filter_map(|c| sample(&c.path, progress).map(|s| (c, s))).collect();
+    progress.checking.store(candidates.len() as u64, Ordering::Relaxed);
+    let sampled: Vec<(Candidate, Sample)> = candidates
+        .into_par_iter()
+        .filter_map(|c| {
+            let sample = sample(&c.path, progress);
+            progress.checked.fetch_add(1, Ordering::Relaxed);
+            sample.map(|s| (c, s))
+        })
+        .collect();
     if progress.cancelled() {
         return None;
     }
@@ -199,7 +231,7 @@ fn sample(path: &std::path::Path, progress: &Progress) -> Option<Sample> {
     if progress.cancelled() {
         return None;
     }
-    let mut file = File::open(path).ok()?;
+    let mut file = open(path)?;
     let meta = file.metadata().ok()?;
     if in_cloud(&meta) {
         return None;
@@ -218,7 +250,7 @@ fn sample(path: &std::path::Path, progress: &Progress) -> Option<Sample> {
 }
 
 fn hash_whole(path: &std::path::Path, progress: &Progress) -> Option<Hash> {
-    let mut file = File::open(path).ok()?;
+    let mut file = open(path)?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1 << 20];
     loop {

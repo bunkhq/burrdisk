@@ -15,6 +15,8 @@ struct Tween {
     target: bool,
     from: f32,
     since: Instant,
+    /// Whether the element was drawn since the last render ended
+    seen: bool,
 }
 
 impl Tween {
@@ -38,7 +40,12 @@ thread_local! {
 /// Current 0..1 hover amount for `key`
 pub fn hover(key: impl Into<ElementId>) -> f32 {
     let key = key.into();
-    TWEENS.with(|t| t.borrow().get(&key).map_or(0.0, Tween::value))
+    TWEENS.with(|t| {
+        t.borrow_mut().get_mut(&key).map_or(0.0, |tween| {
+            tween.seen = true;
+            tween.value()
+        })
+    })
 }
 
 /// Points `key` at `target`, starting from wherever it is now. Returns the current value
@@ -48,12 +55,12 @@ pub fn track(key: impl Into<ElementId>, target: bool) -> f32 {
         let mut map = t.borrow_mut();
         let current = map.get(&key).map_or(0.0, Tween::value);
         match map.get_mut(&key) {
-            Some(tween) if tween.target == target => {}
+            Some(tween) if tween.target == target => tween.seen = true,
             Some(tween) => {
-                *tween = Tween { target, from: current, since: Instant::now() };
+                *tween = Tween { target, from: current, since: Instant::now(), seen: true };
             }
             None if target => {
-                map.insert(key, Tween { target, from: 0.0, since: Instant::now() });
+                map.insert(key, Tween { target, from: 0.0, since: Instant::now(), seen: true });
             }
             None => {}
         }
@@ -71,11 +78,15 @@ pub fn on_hover(key: impl Into<ElementId>) -> impl Fn(&bool, &mut Window, &mut A
 }
 
 /// Whether any tween is still moving; the root view keeps requesting frames until not.
-/// Settled, un-hovered entries are dropped here
+/// Runs once at the end of each render. Settled, un-hovered entries are dropped here,
+/// and so are those of elements the render left out: one that vanished under the
+/// pointer, like a button that hides itself when clicked, never hears the pointer
+/// leave, and would come back looking hovered
 pub fn animating() -> bool {
     TWEENS.with(|t| {
         let mut map = t.borrow_mut();
-        map.retain(|_, tween| tween.target || !tween.settled());
+        map.retain(|_, tween| tween.seen && (tween.target || !tween.settled()));
+        map.values_mut().for_each(|tween| tween.seen = false);
         map.values().any(|tween| !tween.settled())
     })
 }

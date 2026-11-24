@@ -28,6 +28,11 @@ pub fn text_muted() -> Rgba {
 pub fn text_faint() -> Rgba {
     rgb(0x6b6b73)
 }
+/// Faint lifted for small copy that has to be read, not just noticed: 5.4:1 on the
+/// ground where Faint is 3.5:1
+pub fn text_quiet() -> Rgba {
+    rgb(0x8b8b93)
+}
 pub fn accent() -> Rgba {
     rgb(0xf97316)
 }

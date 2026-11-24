@@ -158,13 +158,13 @@ const RULES: &[Rule] = &[
         note("Build output", "Next.js build files and cache", Safe),
         "The next build makes it again",
     ))), "package.json"),
-    rule(Os::Any, &["__pycache__"], DIR, note("Bytecode cache", "Compiled Python files. Python makes them again when it needs them", Safe)),
-    rule(Os::Any, &[".gradle"], DIR, note("Build cache", "Gradle's downloads and build cache. Gradle fetches what it needs again", Safe)),
+    rule(Os::Any, &["__pycache__"], DIR, note("Bytecode cache", "Compiled Python files. Python makes them again when it needs them.", Safe)),
+    rule(Os::Any, &[".gradle"], DIR, note("Build cache", "Gradle's downloads and build cache. Gradle fetches what it needs again.", Safe)),
     rule(Os::Any, &[".npm", "_cacache"], DIR, act(
         note("Download cache", "Packages npm keeps so installs go faster", Safe),
         Action::Copy("npm cache clean --force"),
     )),
-    rule(Os::Any, &[".cargo", "registry"], DIR, note("Download cache", "Crates Cargo downloaded. It fetches them again when a project needs them", Safe)),
+    rule(Os::Any, &[".cargo", "registry"], DIR, note("Download cache", "Crates Cargo downloaded. It fetches them again when a project needs them.", Safe)),
     rule(Os::Any, &["steamapps", "common"], DIR, how(
         note("Game library", "Games installed by Steam", Elsewhere),
         "Uninstall games in Steam, so it knows they're gone",
@@ -194,8 +194,8 @@ const RULES: &[Rule] = &[
         note("Device backups", "Backups of your iPhone and iPad", Review),
         "Manage them in Finder: select the device, then Manage Backups",
     )),
-    rule(Os::Mac, &["itunes", "iphone software updates"], DIR, note("iPhone updates", "iOS updates downloaded to install on an iPhone or iPad. They download again when needed", Safe)),
-    rule(Os::Mac, &["mail downloads"], DIR, note("Mail attachments", "Attachments you opened in Mail. The originals stay in your mail", Safe)),
+    rule(Os::Mac, &["itunes", "iphone software updates"], DIR, note("iPhone updates", "iOS updates downloaded to install on an iPhone or iPad. They download again when needed.", Safe)),
+    rule(Os::Mac, &["mail downloads"], DIR, note("Mail attachments", "Attachments you opened in Mail. The originals stay in your mail.", Safe)),
     rule(Os::Mac, &["caches", "homebrew"], DIR, act(
         note("Download cache", "Homebrew's downloads and old versions", Safe),
         Action::Copy("brew cleanup --prune=all"),
@@ -215,12 +215,12 @@ const RULES: &[Rule] = &[
     at_root(rule(Os::Windows, &["hiberfil.sys"], FILE, act(
         how(
             note("Hibernation file", "Windows saves memory here to hibernate and for Fast Startup", Elsewhere),
-            "Turn hibernation off to remove it. Run this as administrator",
+            "Turn hibernation off to remove it. Run this as administrator.",
         ),
         Action::Copy("powercfg /h off"),
     ))),
-    at_root(rule(Os::Windows, &["pagefile.sys"], FILE, note("Virtual memory", "Memory Windows moves to disk when RAM runs short. Windows manages its size", Keep))),
-    at_root(rule(Os::Windows, &["swapfile.sys"], FILE, note("Virtual memory", "Memory Windows uses for Store apps. Windows manages its size", Keep))),
+    at_root(rule(Os::Windows, &["pagefile.sys"], FILE, note("Virtual memory", "Memory Windows moves to disk when RAM runs short. Windows manages its size.", Keep))),
+    at_root(rule(Os::Windows, &["swapfile.sys"], FILE, note("Virtual memory", "Memory Windows uses for Store apps. Windows manages its size.", Keep))),
     at_root(rule(Os::Windows, &["windows.old"], DIR, act(
         how(
             note("Previous Windows", "Your last Windows version, kept so you can go back after an upgrade", Elsewhere),
@@ -241,7 +241,7 @@ const RULES: &[Rule] = &[
     ))),
     rule(Os::Windows, &["windows", "winsxs"], DIR, act(
         how(
-            note("Component store", "Windows components and updates. It looks bigger than it is, because most of its files are also in System32", Keep),
+            note("Component store", "Windows components and updates. It looks bigger than it is, because most of its files are also in System32.", Keep),
             "Disk Cleanup trims it: Clean up system files, then Windows Update Cleanup",
         ),
         Action::Launch("cleanmgr.exe"),
@@ -262,8 +262,8 @@ const RULES: &[Rule] = &[
         ),
         Action::Launch("cleanmgr.exe"),
     )),
-    rule(Os::Windows, &["appdata", "local", "temp"], DIR, note("Temporary files", "Files apps left behind while they worked. Files still in use can't be moved and stay put", Safe)),
-    rule(Os::Windows, &["windows", "temp"], DIR, note("Temporary files", "Files Windows and installers left behind. Files still in use can't be moved and stay put", Safe)),
+    rule(Os::Windows, &["appdata", "local", "temp"], DIR, note("Temporary files", "Files apps left behind while they worked. Files still in use can't be moved and stay put.", Safe)),
+    rule(Os::Windows, &["windows", "temp"], DIR, note("Temporary files", "Files Windows and installers left behind. Files still in use can't be moved and stay put.", Safe)),
     rule(Os::Windows, &["crashdumps"], DIR, note("Crash reports", "Memory dumps saved when apps crashed", Safe)),
     rule(Os::Windows, &["windows", "memory.dmp"], FILE, note("Crash dump", "Memory Windows saved when it last crashed", Safe)),
     rule(Os::Windows, &["windows", "minidump"], DIR, note("Crash dumps", "Small memory dumps Windows saved when it crashed", Safe)),
@@ -274,9 +274,9 @@ const RULES: &[Rule] = &[
         ),
         Action::Launch("cleanmgr.exe"),
     )),
-    rule(Os::Windows, &["user data", "default", "cache"], DIR, note("Browser cache", "Pages and images a browser saved to load sites faster, for Chrome, Edge, Brave and others. It fills again as you browse", Safe)),
-    rule(Os::Windows, &["appdata", "local", "npm-cache"], DIR, note("npm cache", "Packages npm downloaded before. It downloads them again when a project needs them", Safe)),
-    rule(Os::Windows, &["nvidia", "dxcache"], DIR, note("Shader cache", "Graphics shaders the NVIDIA driver built for games. Games build them again as they run", Safe)),
+    rule(Os::Windows, &["user data", "default", "cache"], DIR, note("Browser cache", "Pages and images a browser saved to load sites faster, for Chrome, Edge, Brave and others. It fills again as you browse.", Safe)),
+    rule(Os::Windows, &["appdata", "local", "npm-cache"], DIR, note("npm cache", "Packages npm downloaded before. It downloads them again when a project needs them.", Safe)),
+    rule(Os::Windows, &["nvidia", "dxcache"], DIR, note("Shader cache", "Graphics shaders the NVIDIA driver built for games. Games build them again as they run.", Safe)),
     at_root(rule(Os::Windows, &["$windows.~bt"], DIR, act(
         how(
             note("Upgrade files", "Files left from installing a Windows upgrade", Elsewhere),
@@ -292,7 +292,7 @@ const RULES: &[Rule] = &[
         Action::Open("ms-settings:storagesense"),
     ))),
     rule(Os::Windows, &["ext4.vhdx"], FILE, how(
-        note("Linux disk", "A WSL distribution's whole disk. It grows but never shrinks by itself", Elsewhere),
+        note("Linux disk", "A WSL distribution's whole disk. It grows but never shrinks by itself.", Elsewhere),
         "Delete files inside Linux, run wsl --shutdown, then compact it with Optimize-VHD or diskpart's compact vdisk",
     )),
     rule(Os::Windows, &["docker_data.vhdx"], FILE, how(
@@ -369,6 +369,9 @@ pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
     if node.kind == NodeKind::Hidden {
         return Some(HIDDEN);
     }
+    if !candidate(node.name) {
+        return None;
+    }
     let path = names(&tree.path(id));
     RULES
         .iter()
@@ -421,15 +424,33 @@ pub fn candidate(name: &str) -> bool {
 /// Whether an item is a suggestion: safe to move to the Trash, and not part of a
 /// project changed in the last two weeks
 pub fn suggested(tree: &Tree, id: NodeId, now: u32) -> bool {
-    candidate(tree.node(id).name)
-        && explain(tree, id).is_some_and(|note| {
-            note.verdict == Safe && !(note.project && now.saturating_sub(tree.node(id).modified) < IN_USE)
-        })
+    explain(tree, id).is_some_and(|note| {
+        note.verdict == Safe && !(note.project && now.saturating_sub(tree.node(id).modified) < IN_USE)
+    })
 }
 
-/// Whether the Collector should refuse an item, because the system needs it
+/// The nearest note up from an item, its own or a folder's it sits in, with the item
+/// the note is for. What's inside a known folder is part of it, unless it has a note
+/// of its own, like Temp inside Windows
+fn governing(tree: &Tree, mut id: NodeId) -> Option<(NodeId, Insight)> {
+    loop {
+        if let Some(note) = explain(tree, id) {
+            return Some((id, note));
+        }
+        id = tree.node(id).parent?;
+    }
+}
+
+/// The note an item shows: its own, or the one of a folder the system needs that it
+/// sits in, with the item that note is for
+pub fn note_for(tree: &Tree, id: NodeId) -> Option<(NodeId, Insight)> {
+    governing(tree, id).filter(|(from, note)| *from == id || note.verdict == Keep)
+}
+
+/// Whether the Collector should refuse an item, because the system needs it or the
+/// folder it's in
 pub fn protected(tree: &Tree, id: NodeId) -> bool {
-    explain(tree, id).is_some_and(|i| i.verdict == Keep)
+    governing(tree, id).is_some_and(|(_, note)| note.verdict == Keep)
 }
 
 #[cfg(test)]
@@ -457,6 +478,30 @@ mod tests {
         assert_eq!(explain(&tree, find("rust", "target")).unwrap().verdict, Safe);
         assert!(explain(&tree, find("other", "target")).is_none());
         assert!(!protected(&tree, find("web", "node_modules")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn protects_what_is_inside_system_folders() {
+        let dir = std::env::temp_dir().join(format!("burrdisk-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("windows/installer/package")).unwrap();
+        std::fs::create_dir_all(dir.join("windows/temp/leftover")).unwrap();
+        let tree = scan::scan(&dir, "t", &Progress::default()).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        let child = |parent: NodeId, name: &str| {
+            *tree.node(parent).children.iter().find(|c| tree.node(**c).name == name).unwrap()
+        };
+        let windows = child(Tree::ROOT, "windows");
+        let installer = child(windows, "installer");
+        let package = child(installer, "package");
+        let leftover = child(child(windows, "temp"), "leftover");
+        assert!(protected(&tree, installer));
+        assert!(protected(&tree, package));
+        assert_eq!(note_for(&tree, package).map(|(from, _)| from), Some(installer));
+        // Temp has a note of its own, so what's in it isn't Windows'
+        assert!(!protected(&tree, leftover));
+        assert!(note_for(&tree, leftover).is_none());
     }
 
     #[test]

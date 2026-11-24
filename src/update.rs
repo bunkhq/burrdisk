@@ -89,7 +89,7 @@ pub fn blocker() -> Option<String> {
         Some(Install::Bundle(app)) => {
             let path = app.to_string_lossy();
             if path.contains("/AppTranslocation/") {
-                return Some("macOS is running it from a temporary copy. Move it to Applications first".into());
+                return Some("macOS is running it from a temporary copy. Move it to Applications first.".into());
             }
             let parent = app.parent()?;
             if !writable(parent) {

@@ -184,11 +184,17 @@ pub struct Explorer {
     pub dupes: Option<Dupes>,
     /// What grew since an earlier scan of the same folder or disk, once loaded
     pub growth: Option<Rc<crate::history::Growth>>,
+    /// The earlier scan `growth` compares with, kept to compare again as the tree changes
+    past: Option<Rc<crate::history::Snapshot>>,
     _history: Option<Task<()>>,
     /// Keeps the tree up to date with changes made outside Burrdisk
     _live: Option<Live>,
     /// A search waiting for a pause in typing
     _typing: Option<Task<()>>,
+    /// Whether the search field's caret shows, flipped by `_blink` while it's open.
+    /// A timer rather than an endless animation, which would redraw every frame
+    pub caret_on: bool,
+    _blink: Option<Task<()>>,
     /// The cloud folders in the scan
     pub clouds: Rc<Vec<NodeId>>,
     /// Items suggestions leave out
@@ -208,6 +214,8 @@ const VOLUMES_EVERY: Duration = Duration::from_secs(4);
 /// Above this many files under the focus, a search waits for a pause in typing
 const BIG_SEARCH: u64 = 200_000;
 const TYPING_PAUSE: Duration = Duration::from_millis(150);
+/// How long the search caret stays lit, then dark
+const CARET_BLINK: Duration = Duration::from_millis(530);
 
 /// Comparing file contents for the `is:dup` search, which starts the first time a
 /// search asks for duplicates and covers the whole scan
@@ -321,6 +329,27 @@ pub struct PutBack {
 
 pub const PUT_BACK_DURATION: Duration = Duration::from_secs(12);
 
+/// How far a comparison of contents got: files whose ends were checked, then bytes
+/// read whole
+#[derive(Clone, Copy, Default)]
+pub struct Comparing {
+    pub checked: u64,
+    pub checking: u64,
+    pub read: u64,
+    pub reading: u64,
+}
+
+impl Comparing {
+    /// Done so far, 0 to 100. Checking the ends counts as the first fifth, as it reads
+    /// far less than the second pass does
+    pub fn percent(&self) -> u64 {
+        match (80 * self.read.min(self.reading)).checked_div(self.reading) {
+            Some(read) => 20 + read,
+            None => (20 * self.checked.min(self.checking)).checked_div(self.checking).unwrap_or(0),
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     /// Items moved to the Trash
@@ -329,6 +358,9 @@ pub enum Tone {
     Failed,
     /// Neither: a note, e.g. why something can't be collected
     Info,
+    /// Something other than a move to the Trash went wrong, which isn't Trash Red's
+    /// to say
+    Error,
 }
 
 pub const NOTICE_DURATION: Duration = Duration::from_secs(6);
@@ -479,6 +511,8 @@ impl Burrdisk {
         if !path.is_dir() {
             return;
         }
+        // A folder dropped on the explorer leaves the scan open there for later
+        self.keep_scan();
         if let Some(volume) = volumes::list().into_iter().find(|v| v.mount == path) {
             self.scan_volume(volume, cx);
             return;
@@ -729,9 +763,12 @@ impl Burrdisk {
             rows_scroll: gpui::ScrollHandle::new(),
             dupes: None,
             growth: None,
+            past: None,
             _history: None,
             _live: None,
             _typing: None,
+            caret_on: true,
+            _blink: None,
             clouds,
             ignored,
         });
@@ -836,7 +873,8 @@ impl Burrdisk {
             let Some(past) = past.await else { return };
             this.update(cx, |this, cx| {
                 if let Some(explorer) = this.explorer() {
-                    explorer.growth = Some(Rc::new(crate::history::Growth::compare(&explorer.tree, &past)));
+                    explorer.past = Some(Rc::new(past));
+                    explorer.compare_growth();
                     explorer.run_search();
                     cx.notify();
                 }
@@ -853,7 +891,17 @@ impl Burrdisk {
     }
 
     pub fn go_home(&mut self, cx: &mut Context<Self>) {
-        // Keep the finished scan so returning to it this session is instant
+        self.keep_scan();
+        self.home_since = Instant::now();
+        self.refresh_volumes(cx);
+        self.refresh_trash(cx);
+        self.prompt_update();
+        cx.notify();
+    }
+
+    /// Leaves the explorer for home, keeping the finished scan so returning to it this
+    /// session is instant
+    fn keep_scan(&mut self) {
         if let Screen::Explorer(explorer) = std::mem::replace(&mut self.screen, Screen::Home) {
             let lobes = sunburst::layout(&explorer.tree, Tree::ROOT, Measure::Size, Palette::Wheel)
                 .into_iter()
@@ -870,11 +918,6 @@ impl Burrdisk {
                 },
             );
         }
-        self.home_since = Instant::now();
-        self.refresh_volumes(cx);
-        self.refresh_trash(cx);
-        self.prompt_update();
-        cx.notify();
     }
 
     /// Looks for a newer release a few seconds after launch, then every few hours
@@ -1213,6 +1256,34 @@ impl Burrdisk {
         self.type_search(text, cx);
     }
 
+    /// Blinks the search field's caret for as long as the field stays open
+    fn blink(&mut self, cx: &mut Context<Self>) {
+        let Some(explorer) = self.explorer().filter(|e| e._blink.is_none()) else { return };
+        explorer.caret_on = true;
+        explorer._blink = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(CARET_BLINK).await;
+                let open = this
+                    .update(cx, |this, cx| {
+                        let Some(explorer) = this.explorer().filter(|e| e.search.is_some()) else { return false };
+                        explorer.caret_on = !explorer.caret_on;
+                        cx.notify();
+                        true
+                    })
+                    .unwrap_or(false);
+                if !open {
+                    break;
+                }
+            }
+            this.update(cx, |this, _| {
+                if let Some(explorer) = this.explorer() {
+                    explorer._blink = None;
+                }
+            })
+            .ok();
+        }));
+    }
+
     /// Search text typed in. A search walks everything under the focus, so in a big
     /// scan it waits for a pause in typing
     fn type_search(&mut self, text: String, cx: &mut Context<Self>) {
@@ -1222,6 +1293,7 @@ impl Burrdisk {
             || text.trim().is_empty();
         explorer.search.get_or_insert_with(Search::default).text = text;
         explorer._typing = None;
+        explorer.caret_on = true;
         if now {
             explorer.run_search();
         } else {
@@ -1291,7 +1363,7 @@ impl Burrdisk {
                 };
                 explorer.notice = Some(Notice { text: text.into(), tone: Tone::Info, shown: Instant::now(), put_back: None });
             }
-            Err(error) => self.show_notice(format!("Couldn\u{2019}t save that: {error}"), true, cx),
+            Err(error) => self.show_notice(format!("Couldn\u{2019}t save that: {error}"), Tone::Error, cx),
         }
         cx.notify();
     }
@@ -1314,10 +1386,12 @@ impl Burrdisk {
                         "{service} is making \u{201c}{name}\u{201d} online-only, freeing up to {}",
                         crate::format::bytes(size)
                     ),
-                    false,
+                    Tone::Info,
                     cx,
                 ),
-                Err(error) => this.show_notice(format!("Couldn\u{2019}t free up \u{201c}{name}\u{201d}: {error}"), true, cx),
+                Err(error) => {
+                    this.show_notice(format!("Couldn\u{2019}t free up \u{201c}{name}\u{201d}: {error}"), Tone::Error, cx)
+                }
             })
             .ok();
         })
@@ -1355,8 +1429,8 @@ impl Burrdisk {
             };
             let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().to_string());
             this.update(cx, |this, cx| match written {
-                Ok(()) => this.show_notice(format!("Saved the list as {name}"), false, cx),
-                Err(error) => this.show_notice(format!("Couldn\u{2019}t save the list: {error}"), true, cx),
+                Ok(()) => this.show_notice(format!("Saved the list as {name}"), Tone::Info, cx),
+                Err(error) => this.show_notice(format!("Couldn\u{2019}t save the list: {error}"), Tone::Error, cx),
             })
             .ok();
         })
@@ -1495,7 +1569,8 @@ impl Burrdisk {
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(TRASH_LINGER).await;
                     this.update(cx, |this, cx| {
-                        this.show_notice_with(text, error, put_back, cx);
+                        let tone = if error { Tone::Failed } else { Tone::Done };
+                        this.show_notice_with(text, tone, put_back, cx);
                         this.refresh_trash(cx);
                     })
                     .ok();
@@ -1508,14 +1583,14 @@ impl Burrdisk {
         cx.notify();
     }
 
-    pub fn show_notice(&mut self, text: String, error: bool, cx: &mut Context<Self>) {
-        self.show_notice_with(text, error, None, cx);
+    pub fn show_notice(&mut self, text: String, tone: Tone, cx: &mut Context<Self>) {
+        self.show_notice_with(text, tone, None, cx);
     }
 
-    fn show_notice_with(&mut self, text: String, error: bool, put_back: Option<PutBack>, cx: &mut Context<Self>) {
+    fn show_notice_with(&mut self, text: String, tone: Tone, put_back: Option<PutBack>, cx: &mut Context<Self>) {
         let Some(explorer) = self.explorer() else { return };
         let shown = Instant::now();
-        let notice = Notice { text: text.into(), tone: if error { Tone::Failed } else { Tone::Done }, shown, put_back };
+        let notice = Notice { text: text.into(), tone, shown, put_back };
         let lasts = notice.lasts();
         explorer.notice = Some(notice);
         cx.spawn(async move |this, cx| {
@@ -1549,7 +1624,7 @@ impl Burrdisk {
                     Ok(n) => format!("Put back {n} items"),
                     Err(reason) => format!("Couldn\u{2019}t put them back: {reason}"),
                 };
-                this.show_notice(text, result.is_err(), cx);
+                this.show_notice(text, if result.is_err() { Tone::Failed } else { Tone::Done }, cx);
                 this.refresh_trash(cx);
             })
             .ok();
@@ -1701,14 +1776,21 @@ impl Explorer {
         let Some(results) = self.search.as_ref().and_then(|s| s.results.clone()) else { return };
         let shown = &results.matches[..results.matches.len().min(limit)];
         match &results.dupes {
-            None => shown.iter().for_each(|id| self.collect(*id)),
+            // What the system needs stays put quietly, rather than with a toast each
+            None => {
+                for &id in shown {
+                    if !crate::insight::protected(&self.tree, id) {
+                        self.collect(id);
+                    }
+                }
+            }
             Some(dupes) => {
                 // Later copies first, so the one left is the first
                 for &id in shown.iter().rev() {
                     let others_kept = dupes
                         .copies(&self.tree, id)
                         .is_some_and(|copies| copies.iter().any(|c| *c != id && !self.is_collected(*c)));
-                    if others_kept {
+                    if others_kept && !crate::insight::protected(&self.tree, id) {
                         self.collect(id);
                     }
                 }
@@ -1752,17 +1834,21 @@ impl Explorer {
             self.hover = None;
             self.prev_hover = None;
         }
+        self.compare_growth();
         self.relayout();
     }
 
     /// While the `is:dup` search compares contents: bytes read and to read, the
     /// second 0 until the first pass is done
-    pub fn comparing(&self) -> Option<(u64, u64)> {
+    pub fn comparing(&self) -> Option<Comparing> {
         match &self.dupes {
-            Some(Dupes::Comparing { progress, .. }) => {
-                Some((progress.done.load(Ordering::Relaxed), progress.total.load(Ordering::Relaxed)))
-            }
-            Some(Dupes::Wanted) => Some((0, 0)),
+            Some(Dupes::Comparing { progress, .. }) => Some(Comparing {
+                checked: progress.checked.load(Ordering::Relaxed),
+                checking: progress.checking.load(Ordering::Relaxed),
+                read: progress.done.load(Ordering::Relaxed),
+                reading: progress.total.load(Ordering::Relaxed),
+            }),
+            Some(Dupes::Wanted) => Some(Comparing::default()),
             _ => None,
         }
     }
@@ -1842,20 +1928,21 @@ impl Explorer {
     pub fn activate(&mut self, id: NodeId) {
         if self.tree.node(id).kind == NodeKind::Dir {
             self.set_focus(id);
-        } else if crate::insight::explain(&self.tree, id).is_some() {
+        } else if crate::insight::note_for(&self.tree, id).is_some() {
             self.pinned = Some(id);
         }
     }
 
-    /// The item whose note the sidebar shows: the one clicked, else the folder listed
-    pub fn explained(&self) -> Option<(NodeId, crate::insight::Insight, bool)> {
+    /// The item whose note the sidebar shows: the one clicked, else the folder listed.
+    /// Last comes the item the note is for, a folder it's in when it has none of its own
+    pub fn explained(&self) -> Option<(NodeId, crate::insight::Insight, bool, NodeId)> {
         if let Some(id) = self.pinned.filter(|id| self.tree.is_attached(*id))
-            && let Some(insight) = crate::insight::explain(&self.tree, id)
+            && let Some((from, insight)) = crate::insight::note_for(&self.tree, id)
         {
-            return Some((id, insight, true));
+            return Some((id, insight, true, from));
         }
         let listed = self.listed();
-        crate::insight::explain(&self.tree, listed).map(|insight| (listed, insight, false))
+        crate::insight::note_for(&self.tree, listed).map(|(from, insight)| (listed, insight, false, from))
     }
 
     pub fn set_focus(&mut self, id: NodeId) {
@@ -1942,6 +2029,13 @@ impl Explorer {
             || self.countdown.is_some()
             || self.revealed.elapsed() < sunburst::REVEAL_DURATION
             || self.hover_since.elapsed() < HOVER_FADE
+    }
+
+    /// What grew since the earlier scan, compared again after the tree changed
+    fn compare_growth(&mut self) {
+        if let Some(past) = &self.past {
+            self.growth = Some(Rc::new(crate::history::Growth::compare(&self.tree, past)));
+        }
     }
 
     pub fn relayout(&mut self) {
@@ -2244,6 +2338,9 @@ impl Render for Burrdisk {
             self.compare_files(cx);
         }
         let searching = matches!(&self.screen, Screen::Explorer(e) if e.search.is_some());
+        if searching {
+            self.blink(cx);
+        }
         div()
             .id("root")
             .key_context(if searching { "Burrdisk searching" } else { "Burrdisk" })
