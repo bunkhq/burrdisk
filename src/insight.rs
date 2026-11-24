@@ -373,10 +373,14 @@ pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
         return None;
     }
     let path = names(&tree.path(id));
+    // macOS's system volume is read-only, so a Caches folder or the like in it is
+    // still part of the system, not something to clear
+    let sealed = cfg!(target_os = "macos") && path.len() > 1 && path[0] == "system";
     RULES
         .iter()
         .find(|rule| {
             rule.os.here()
+                && !(sealed && rule.insight.verdict != Keep)
                 && !(rule.insight.project && installed(&path))
                 && rule.kind.is_none_or(|k| k == node.kind)
                 && path.len() >= rule.path.len()
@@ -502,6 +506,13 @@ mod tests {
         // Temp has a note of its own, so what's in it isn't Windows'
         assert!(!protected(&tree, leftover));
         assert!(note_for(&tree, leftover).is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn keeps_caches_on_the_system_volume() {
+        let tree = scan::scan(Path::new("/System/Library/Caches"), "Caches", &Progress::default()).unwrap();
+        assert!(explain(&tree, Tree::ROOT).is_none());
     }
 
     #[test]
