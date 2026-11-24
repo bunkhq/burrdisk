@@ -1524,8 +1524,20 @@ fn search_field(explorer: &Explorer, cx: &mut Context<Burrdisk>) -> impl IntoEle
                 .text_size(px(13.5))
                 .overflow_hidden()
                 .when_some(chip, |s, chip| s.child(query_chip(chip).mr(px(2.))))
-                .when(!text.is_empty(), |s| s.child(div().flex_none().whitespace_nowrap().child(text.clone())))
-                .when(open, |s| s.child(caret))
+                // The text and caret sit in a box that shrinks to fit them, and once they
+                // outgrow the field they hang from its right edge, so what's being typed
+                // stays in view and the start slides off instead
+                .child(
+                    div()
+                        .flex()
+                        .flex_shrink()
+                        .min_w_0()
+                        .justify_end()
+                        .items_center()
+                        .overflow_hidden()
+                        .when(!text.is_empty(), |s| s.child(div().flex_none().whitespace_nowrap().child(text.clone())))
+                        .when(open, |s| s.child(caret)),
+                )
                 .when(text.is_empty() && chip.is_none(), |s| {
                     s.child(
                         div()
@@ -1688,9 +1700,12 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
     let searching = explorer.search.is_some();
     // While a search for duplicates waits on the comparison, it says how far that got
     let comparing = comparing(explorer);
-    let no_matches = results.is_some_and(|r| r.matches.is_empty()) && comparing.is_none();
     // What grew needs an earlier scan, and says so when there's none or nothing grew
     let grown_query = explorer.search.as_ref().is_some_and(|s| search::Query::parse(&s.text).grown);
+    let no_matches = results.is_some_and(|r| r.matches.is_empty())
+        && comparing.is_none()
+        // What grew waits, briefly, for the earlier scans to be read
+        && !(grown_query && !explorer.history_read);
     let (empty_title, empty_detail) = match (&explorer.growth, grown_query) {
         (None, true) => (
             "Nothing to compare with yet".to_string(),

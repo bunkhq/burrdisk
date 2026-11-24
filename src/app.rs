@@ -186,6 +186,9 @@ pub struct Explorer {
     pub growth: Option<Rc<crate::history::Growth>>,
     /// The earlier scan `growth` compares with, kept to compare again as the tree changes
     past: Option<Rc<crate::history::Snapshot>>,
+    /// Whether the earlier scans were looked for yet, so "nothing to compare with"
+    /// isn't said before it's known
+    pub history_read: bool,
     _history: Option<Task<()>>,
     /// Keeps the tree up to date with changes made outside Burrdisk
     _live: Option<Live>,
@@ -765,6 +768,7 @@ impl Burrdisk {
             growth: None,
             past: None,
             _history: None,
+            history_read: false,
             _live: None,
             _typing: None,
             caret_on: true,
@@ -870,12 +874,15 @@ impl Burrdisk {
             cx.background_executor().spawn(async move { crate::history::previous(&root, crate::format::unix_now()) });
         // The task ends with the explorer, which drops it
         explorer._history = Some(cx.spawn(async move |this, cx| {
-            let Some(past) = past.await else { return };
+            let past = past.await;
             this.update(cx, |this, cx| {
                 if let Some(explorer) = this.explorer() {
-                    explorer.past = Some(Rc::new(past));
-                    explorer.compare_growth();
-                    explorer.run_search();
+                    explorer.history_read = true;
+                    if let Some(past) = past {
+                        explorer.past = Some(Rc::new(past));
+                        explorer.compare_growth();
+                        explorer.run_search();
+                    }
                     cx.notify();
                 }
             })

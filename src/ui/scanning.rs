@@ -1,13 +1,14 @@
 use std::sync::atomic::Ordering;
 
-use gpui::{Context, FontWeight, IntoElement, Window, canvas, div, prelude::*};
+use gpui::{Context, FontWeight, IntoElement, Window, WindowControlArea, canvas, div, prelude::*};
 use crate::ui::px;
 
 use crate::app::{Burrdisk, Screen};
 use crate::format;
 use crate::sunburst;
 use crate::theme;
-use crate::ui::components::{ButtonStyle, Icon, icon_label_button};
+use crate::platform;
+use crate::ui::components::{ButtonStyle, Icon, icon_label_button, window_controls};
 
 pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk>) -> impl IntoElement {
     let Screen::Scanning(scanning) = &app.screen else {
@@ -37,7 +38,19 @@ pub fn render(app: &mut Burrdisk, window: &mut Window, cx: &mut Context<Burrdisk
         .flex()
         .flex_col()
         .size_full()
-        .child(div().h(px(56.)).flex_none())
+        // An empty titlebar, which still moves the window and, on Windows, holds its
+        // buttons, so a long scan doesn't pin the window in place
+        .child(
+            div()
+                .flex()
+                .flex_none()
+                .justify_end()
+                .h(px(56.))
+                .pr(px(platform::TITLEBAR_END))
+                .window_control_area(WindowControlArea::Drag)
+                .occlude()
+                .child(window_controls(window)),
+        )
         .child(
             div()
                 .flex_1()

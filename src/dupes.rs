@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rayon::prelude::*;
@@ -88,27 +89,52 @@ impl Dupes {
 
 /// Files in the scan big enough to compare that share their size with another
 pub fn candidates(tree: &Tree) -> Vec<Candidate> {
+    // Runs on the UI thread, so paths are built only for the folders that hold a file
+    // with a same-sized twin, each once, rather than for every file from the top
     let mut by_size: HashMap<u64, Vec<NodeId>> = HashMap::new();
     let mut stack = vec![Tree::ROOT];
     while let Some(id) = stack.pop() {
-        let node = tree.node(id);
-        match node.kind {
-            NodeKind::File if node.size >= MIN_SIZE => by_size.entry(node.size).or_default().push(id),
-            // Children are sorted largest first, so the rest are too small to matter
-            NodeKind::Dir => stack.extend(node.children.iter().take_while(|c| tree.node(**c).size >= MIN_SIZE)),
-            _ => {}
+        // Children are sorted largest first, so the rest are too small to matter
+        for &child in tree.node(id).children.iter().take_while(|c| tree.node(**c).size >= MIN_SIZE) {
+            match tree.node(child).kind {
+                NodeKind::File => by_size.entry(tree.node(child).size).or_default().push(child),
+                NodeKind::Dir => stack.push(child),
+                _ => {}
+            }
         }
     }
+    let mut folders: HashMap<NodeId, (Rc<PathBuf>, usize)> = HashMap::new();
     by_size
         .into_values()
-        .filter(|ids| ids.len() > 1)
+        .filter(|files| files.len() > 1)
         .flatten()
         .map(|id| {
-            let path = tree.path(id);
-            let rank = (path.components().count(), tree.node(id).name.len());
-            Candidate { id, path, rank }
+            let node = tree.node(id);
+            let (folder, depth) = folder_path(tree, node.parent.unwrap_or(Tree::ROOT), &mut folders);
+            Candidate { id, path: folder.join(node.name), rank: (depth + 1, node.name.len()) }
         })
         .collect()
+}
+
+/// A folder's path and how many parts it has, remembered for the next file in it or
+/// below it
+fn folder_path(tree: &Tree, id: NodeId, known: &mut HashMap<NodeId, (Rc<PathBuf>, usize)>) -> (Rc<PathBuf>, usize) {
+    if let Some(found) = known.get(&id) {
+        return found.clone();
+    }
+    let found = match tree.node(id).parent {
+        Some(parent) => {
+            let (path, depth) = folder_path(tree, parent, known);
+            (Rc::new(path.join(tree.node(id).name)), depth + 1)
+        }
+        None => {
+            let path = tree.path(id);
+            let depth = path.components().count();
+            (Rc::new(path), depth)
+        }
+    };
+    known.insert(id, found.clone());
+    found
 }
 
 /// Compares the candidates' contents. `None` when cancelled. Runs on a few threads
