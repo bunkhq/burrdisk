@@ -411,26 +411,35 @@ fn fits(rule: &Rule, path: &[String], kind: NodeKind) -> bool {
         && (!rule.at_root || path.len() == rule.path.len())
 }
 
-/// The note of the nearest folder above where the scan started, so a scan of
-/// System32 still knows it's inside Windows. Remembered per scan, as it's asked for
-/// every item with no note nearer
-fn above_root(tree: &Tree) -> Option<Insight> {
+/// The note of the nearest folder above where the scan started, with that folder's
+/// name, so a scan of System32 still knows it's inside Windows. Remembered per scan,
+/// as it's asked for every item with no note nearer
+fn above_root(tree: &Tree) -> Option<(Insight, String)> {
+    type Known = Option<(std::path::PathBuf, Option<(Insight, String)>)>;
     thread_local! {
-        static KNOWN: std::cell::RefCell<Option<(std::path::PathBuf, Option<Insight>)>> = const { std::cell::RefCell::new(None) };
+        static KNOWN: std::cell::RefCell<Known> = const { std::cell::RefCell::new(None) };
     }
     KNOWN.with_borrow_mut(|known| {
         if let Some((_, note)) = known.as_ref().filter(|(root, _)| root == tree.root_path()) {
-            return *note;
+            return note.clone();
         }
+        let shown: Vec<String> = tree
+            .root_path()
+            .components()
+            .filter_map(|c| match c {
+                Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect();
         let path = names(tree.root_path());
         let note = (1..path.len()).rev().find_map(|len| {
             let path = &path[..len];
             candidate(&path[len - 1])
                 .then(|| RULES.iter().find(|rule| rule.beside.is_none() && fits(rule, path, NodeKind::Dir)))
                 .flatten()
-                .map(|rule| rule.insight)
+                .map(|rule| (rule.insight, shown[len - 1].clone()))
         });
-        *known = Some((tree.root_path().to_path_buf(), note));
+        *known = Some((tree.root_path().to_path_buf(), note.clone()));
         note
     })
 }
@@ -486,9 +495,13 @@ fn governing(tree: &Tree, mut id: NodeId) -> Option<(NodeId, Insight)> {
 }
 
 /// The note an item shows: its own, or the one of a folder the system needs that it
-/// sits in, with the item that note is for
-pub fn note_for(tree: &Tree, id: NodeId) -> Option<(NodeId, Insight)> {
-    governing(tree, id).filter(|(from, note)| *from == id || note.verdict == Keep)
+/// sits in, with that folder's name. The folder may be above where the scan started
+pub fn note_for(tree: &Tree, id: NodeId) -> Option<(Insight, Option<String>)> {
+    match governing(tree, id) {
+        Some((from, note)) if from == id => Some((note, None)),
+        Some((from, note)) => (note.verdict == Keep).then(|| (note, Some(tree.node(from).name.to_string()))),
+        None => above_root(tree).filter(|(note, _)| note.verdict == Keep).map(|(note, name)| (note, Some(name))),
+    }
 }
 
 /// Whether the Collector should refuse an item, because the system needs it or the
@@ -496,7 +509,7 @@ pub fn note_for(tree: &Tree, id: NodeId) -> Option<(NodeId, Insight)> {
 pub fn protected(tree: &Tree, id: NodeId) -> bool {
     match governing(tree, id) {
         Some((_, note)) => note.verdict == Keep,
-        None => above_root(tree).is_some_and(|note| note.verdict == Keep),
+        None => above_root(tree).is_some_and(|(note, _)| note.verdict == Keep),
     }
 }
 
@@ -545,7 +558,7 @@ mod tests {
         let leftover = child(child(windows, "temp"), "leftover");
         assert!(protected(&tree, installer));
         assert!(protected(&tree, package));
-        assert_eq!(note_for(&tree, package).map(|(from, _)| from), Some(installer));
+        assert_eq!(note_for(&tree, package).and_then(|(_, part_of)| part_of).as_deref(), Some("installer"));
         // Temp has a note of its own, so what's in it isn't Windows'
         assert!(!protected(&tree, leftover));
         assert!(note_for(&tree, leftover).is_none());
@@ -564,6 +577,8 @@ mod tests {
         let tree = scan::scan(Path::new(inside), "inside", &Progress::default()).unwrap();
         assert!(protected(&tree, Tree::ROOT));
         assert!(tree.node(Tree::ROOT).children.iter().all(|c| protected(&tree, *c)));
+        let part_of = note_for(&tree, Tree::ROOT).and_then(|(_, part_of)| part_of);
+        assert_eq!(part_of.as_deref(), Some(if cfg!(windows) { "Windows" } else { "usr" }));
     }
 
     #[cfg(target_os = "macos")]

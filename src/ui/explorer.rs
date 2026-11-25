@@ -1947,7 +1947,7 @@ fn sidebar(explorer: &Explorer, full_disk_access: bool, width: f32, cx: &mut Con
                 .explained()
                 // A search lists results, not the folder, so only a clicked item's note shows
                 .filter(|(_, _, pinned, _)| *pinned || results.is_none())
-                .map(|(id, note, pinned, from)| insight_card(explorer, id, note, pinned, from, cx)),
+                .map(|(id, note, pinned, part_of)| insight_card(explorer, id, note, pinned, part_of, cx)),
         )
         .when(access_hint, |s| s.child(access_panel()))
         .child(
@@ -2055,7 +2055,7 @@ fn insight_card(
     id: NodeId,
     note: Insight,
     pinned: bool,
-    from: NodeId,
+    part_of: Option<String>,
     cx: &mut Context<Burrdisk>,
 ) -> impl IntoElement {
     let name = explorer.tree.node(id).name.to_string();
@@ -2075,11 +2075,11 @@ fn insight_card(
     // What it is, after the clicked item's name, as the header already names the
     // listed folder
     // Inside a folder the system needs, the note is that folder's, so it says whose
-    let what = match (from == id, pinned) {
-        (true, true) => format!("{name} \u{b7} {} \u{b7} {}", note.tag, note.about),
-        (true, false) => format!("{} \u{b7} {}", note.tag, note.about),
-        (false, true) => format!("{name} \u{b7} Part of {} \u{b7} {}", explorer.tree.node(from).name, note.tag),
-        (false, false) => format!("Part of {} \u{b7} {}", explorer.tree.node(from).name, note.tag),
+    let what = match (part_of, pinned) {
+        (None, true) => format!("{name} \u{b7} {} \u{b7} {}", note.tag, note.about),
+        (None, false) => format!("{} \u{b7} {}", note.tag, note.about),
+        (Some(folder), true) => format!("{name} \u{b7} Part of {folder} \u{b7} {}", note.tag),
+        (Some(folder), false) => format!("Part of {folder} \u{b7} {}", note.tag),
     };
     // Rescanning needs a whole disk to rescan
     let action = note.action.filter(|a| *a != Action::RescanAsAdmin || explorer.target.volume.is_some());

@@ -1941,15 +1941,15 @@ impl Explorer {
     }
 
     /// The item whose note the sidebar shows: the one clicked, else the folder listed.
-    /// Last comes the item the note is for, a folder it's in when it has none of its own
-    pub fn explained(&self) -> Option<(NodeId, crate::insight::Insight, bool, NodeId)> {
+    /// Last comes the name of the folder the note is for, when it's one the item is in
+    pub fn explained(&self) -> Option<(NodeId, crate::insight::Insight, bool, Option<String>)> {
         if let Some(id) = self.pinned.filter(|id| self.tree.is_attached(*id))
-            && let Some((from, insight)) = crate::insight::note_for(&self.tree, id)
+            && let Some((insight, part_of)) = crate::insight::note_for(&self.tree, id)
         {
-            return Some((id, insight, true, from));
+            return Some((id, insight, true, part_of));
         }
         let listed = self.listed();
-        crate::insight::note_for(&self.tree, listed).map(|(from, insight)| (listed, insight, false, from))
+        crate::insight::note_for(&self.tree, listed).map(|(insight, part_of)| (listed, insight, false, part_of))
     }
 
     pub fn set_focus(&mut self, id: NodeId) {
