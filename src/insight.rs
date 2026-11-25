@@ -94,7 +94,8 @@ impl Os {
 
 struct Rule {
     os: Os,
-    /// The end of the item's path, lowercase, closest folder last: `["library", "caches"]`
+    /// The end of the item's path, lowercase, closest folder last: `["library", "caches"]`.
+    /// `*` stands for any one folder, but never the item's own name
     path: &'static [&'static str],
     /// The path must be exactly this, from a disk's root
     at_root: bool,
@@ -208,6 +209,16 @@ const RULES: &[Rule] = &[
         note("Trash", "What you've already moved to the Trash", Elsewhere),
         "Empty the Trash in Finder to free this space",
     )),
+    // Temp folders get notes of their own, so they aren't locked as part of the system.
+    // Open apps keep sockets and work files in them, so they're Review rather than Safe
+    rule(Os::Mac, &["var", "folders", "*", "*", "t"], DIR, how(
+        note("Temporary files", "Files apps left behind while they worked", Review),
+        "Quit your apps first, as open ones may still be using what's here. macOS also clears it when you restart.",
+    )),
+    at_root(rule(Os::Mac, &["private", "tmp"], DIR, how(
+        note("Temporary files", "Files apps and macOS left behind while they worked", Review),
+        "Quit your apps first, as open ones may still be using what's here. macOS also clears it when you restart.",
+    ))),
     at_root(rule(Os::Mac, &["system"], DIR, note("System", "macOS itself", Keep))),
     at_root(rule(Os::Mac, &["usr"], DIR, note("System", "Programs and libraries macOS needs", Keep))),
     at_root(rule(Os::Mac, &["private"], DIR, note("System", "macOS's own data, including virtual memory and sleep images", Keep))),
@@ -384,7 +395,7 @@ pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
                 && !(rule.insight.project && installed(&path))
                 && rule.kind.is_none_or(|k| k == node.kind)
                 && path.len() >= rule.path.len()
-                && path[path.len() - rule.path.len()..].iter().zip(rule.path).all(|(a, b)| a == b)
+                && path[path.len() - rule.path.len()..].iter().zip(rule.path).all(|(a, b)| *b == "*" || a == b)
                 && (!rule.at_root || path.len() == rule.path.len())
                 && rule.beside.is_none_or(|file| {
                     node.parent.is_some_and(|p| {
@@ -513,6 +524,19 @@ mod tests {
     fn keeps_caches_on_the_system_volume() {
         let tree = scan::scan(Path::new("/System/Library/Caches"), "Caches", &Progress::default()).unwrap();
         assert!(explain(&tree, Tree::ROOT).is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn temp_folders_are_not_locked() {
+        let dir = std::env::temp_dir().join(format!("burrdisk-temp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tree = scan::scan(&std::env::temp_dir(), "T", &Progress::default()).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(explain(&tree, Tree::ROOT).map(|n| n.verdict), Some(Review));
+        let ours = *tree.node(Tree::ROOT).children.iter().find(|c| tree.node(**c).name.starts_with("burrdisk-temp-")).unwrap();
+        assert!(!protected(&tree, ours));
     }
 
     #[test]
