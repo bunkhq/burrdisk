@@ -384,19 +384,10 @@ pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
         return None;
     }
     let path = names(&tree.path(id));
-    // macOS's system volume is read-only, so a Caches folder or the like in it is
-    // still part of the system, not something to clear
-    let sealed = cfg!(target_os = "macos") && path.len() > 1 && path[0] == "system";
     RULES
         .iter()
         .find(|rule| {
-            rule.os.here()
-                && !(sealed && rule.insight.verdict != Keep)
-                && !(rule.insight.project && installed(&path))
-                && rule.kind.is_none_or(|k| k == node.kind)
-                && path.len() >= rule.path.len()
-                && path[path.len() - rule.path.len()..].iter().zip(rule.path).all(|(a, b)| *b == "*" || a == b)
-                && (!rule.at_root || path.len() == rule.path.len())
+            fits(rule, &path, node.kind)
                 && rule.beside.is_none_or(|file| {
                     node.parent.is_some_and(|p| {
                         tree.node(p).children.iter().any(|c| tree.node(*c).name.eq_ignore_ascii_case(file))
@@ -404,6 +395,44 @@ pub fn explain(tree: &Tree, id: NodeId) -> Option<Insight> {
                 })
         })
         .map(|rule| rule.insight)
+}
+
+/// Whether a rule fits an item's path and kind, leaving out what must sit beside it
+fn fits(rule: &Rule, path: &[String], kind: NodeKind) -> bool {
+    // macOS's system volume is read-only, so a Caches folder or the like in it is
+    // still part of the system, not something to clear
+    let sealed = cfg!(target_os = "macos") && path.len() > 1 && path[0] == "system";
+    rule.os.here()
+        && !(sealed && rule.insight.verdict != Keep)
+        && !(rule.insight.project && installed(path))
+        && rule.kind.is_none_or(|k| k == kind)
+        && path.len() >= rule.path.len()
+        && path[path.len() - rule.path.len()..].iter().zip(rule.path).all(|(a, b)| *b == "*" || a == b)
+        && (!rule.at_root || path.len() == rule.path.len())
+}
+
+/// The note of the nearest folder above where the scan started, so a scan of
+/// System32 still knows it's inside Windows. Remembered per scan, as it's asked for
+/// every item with no note nearer
+fn above_root(tree: &Tree) -> Option<Insight> {
+    thread_local! {
+        static KNOWN: std::cell::RefCell<Option<(std::path::PathBuf, Option<Insight>)>> = const { std::cell::RefCell::new(None) };
+    }
+    KNOWN.with_borrow_mut(|known| {
+        if let Some((_, note)) = known.as_ref().filter(|(root, _)| root == tree.root_path()) {
+            return *note;
+        }
+        let path = names(tree.root_path());
+        let note = (1..path.len()).rev().find_map(|len| {
+            let path = &path[..len];
+            candidate(&path[len - 1])
+                .then(|| RULES.iter().find(|rule| rule.beside.is_none() && fits(rule, path, NodeKind::Dir)))
+                .flatten()
+                .map(|rule| rule.insight)
+        });
+        *known = Some((tree.root_path().to_path_buf(), note));
+        note
+    })
 }
 
 /// Whether an item's name is one a rule ends with, so it may have a note. Much
@@ -465,7 +494,10 @@ pub fn note_for(tree: &Tree, id: NodeId) -> Option<(NodeId, Insight)> {
 /// Whether the Collector should refuse an item, because the system needs it or the
 /// folder it's in
 pub fn protected(tree: &Tree, id: NodeId) -> bool {
-    governing(tree, id).is_some_and(|(_, note)| note.verdict == Keep)
+    match governing(tree, id) {
+        Some((_, note)) => note.verdict == Keep,
+        None => above_root(tree).is_some_and(|note| note.verdict == Keep),
+    }
 }
 
 #[cfg(test)]
@@ -524,6 +556,14 @@ mod tests {
     fn keeps_caches_on_the_system_volume() {
         let tree = scan::scan(Path::new("/System/Library/Caches"), "Caches", &Progress::default()).unwrap();
         assert!(explain(&tree, Tree::ROOT).is_none());
+    }
+
+    #[test]
+    fn protects_scans_that_start_inside_system_folders() {
+        let inside = if cfg!(windows) { "C:\\Windows\\Web" } else { "/usr/share/man" };
+        let tree = scan::scan(Path::new(inside), "inside", &Progress::default()).unwrap();
+        assert!(protected(&tree, Tree::ROOT));
+        assert!(tree.node(Tree::ROOT).children.iter().all(|c| protected(&tree, *c)));
     }
 
     #[cfg(target_os = "macos")]

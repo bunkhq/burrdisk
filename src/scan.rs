@@ -82,6 +82,11 @@ impl Tree {
         }
     }
 
+    /// Where the scan started
+    pub fn root_path(&self) -> &Path {
+        &self.root_path
+    }
+
     pub fn path(&self, id: NodeId) -> PathBuf {
         let mut parts = Vec::new();
         let mut cursor = Some(id);
